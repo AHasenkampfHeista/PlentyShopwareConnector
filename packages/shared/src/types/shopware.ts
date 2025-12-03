@@ -1,0 +1,303 @@
+/**
+ * Shopware 6 API Types
+ * Based on: https://shopware.stoplight.io/
+ */
+
+// ============================================
+// PRODUCTS
+// ============================================
+
+export interface ShopwareProduct {
+  id?: string;
+  parentId?: string;
+  versionId?: string;
+  manufacturerId?: string;
+  productNumber: string;
+  stock: number;
+  availableStock?: number;
+  available?: boolean;
+  deliveryTimeId?: string;
+  restockTime?: number;
+  active: boolean;
+  price: ShopwarePrice[];
+  purchasePrices?: ShopwarePrice[];
+  productMediaId?: string;
+  taxId?: string;
+  unitId?: string;
+  isCloseout?: boolean;
+  purchaseSteps?: number;
+  maxPurchase?: number;
+  minPurchase?: number;
+  purchaseUnit?: number;
+  referenceUnit?: number;
+  shippingFree?: boolean;
+  markAsTopseller?: boolean;
+  weight?: number;
+  width?: number;
+  height?: number;
+  length?: number;
+  releaseDate?: string;
+  categoryTree?: string[];
+  categories?: ShopwareCategory[];
+  properties?: ShopwarePropertyOption[];
+  options?: ShopwarePropertyOption[];
+  tags?: ShopwareTag[];
+  media?: ShopwareProductMedia[];
+  createdAt?: string;
+  updatedAt?: string;
+
+  // Translated fields
+  name?: string;
+  description?: string;
+  metaDescription?: string;
+  metaTitle?: string;
+  keywords?: string;
+  customFields?: Record<string, unknown>;
+
+  // Translation object
+  translations?: Record<string, ShopwareProductTranslation>;
+
+  // Reference to original Plenty data (for internal use)
+  _plentyItemId?: number;
+  _plentyVariationId?: number;
+}
+
+export interface ShopwareProductTranslation {
+  name: string;
+  description?: string;
+  metaDescription?: string;
+  metaTitle?: string;
+  keywords?: string;
+  customFields?: Record<string, unknown>;
+}
+
+export interface ShopwarePrice {
+  currencyId: string;
+  net: number;
+  gross: number;
+  linked: boolean;
+  listPrice?: {
+    net: number;
+    gross: number;
+    linked: boolean;
+  } | null;
+  regulationPrice?: {
+    net: number;
+    gross: number;
+  } | null;
+}
+
+export interface ShopwareCategory {
+  id: string;
+  versionId?: string;
+  parentId?: string;
+  afterCategoryId?: string;
+  name?: string;
+  displayNestedProducts?: boolean;
+  active?: boolean;
+  visible?: boolean;
+  level?: number;
+  path?: string;
+  childCount?: number;
+  productAssignmentType?: string;
+  type?: string;
+  translations?: Record<string, ShopwareCategoryTranslation>;
+}
+
+export interface ShopwareCategoryTranslation {
+  name: string;
+  description?: string;
+  metaTitle?: string;
+  metaDescription?: string;
+  keywords?: string;
+}
+
+export interface ShopwarePropertyOption {
+  id: string;
+  groupId?: string;
+  name?: string;
+  position?: number;
+  colorHexCode?: string;
+  mediaId?: string;
+  translations?: Record<string, { name: string }>;
+}
+
+export interface ShopwareTag {
+  id: string;
+  name?: string;
+}
+
+export interface ShopwareProductMedia {
+  id?: string;
+  mediaId: string;
+  position?: number;
+  alt?: string;
+  title?: string;
+}
+
+// ============================================
+// STOCK
+// ============================================
+
+export interface ShopwareStockUpdate {
+  id: string;
+  productNumber?: string;
+  stock: number;
+}
+
+export interface ShopwareInventory {
+  id: string;
+  productId: string;
+  stock: number;
+  available: boolean;
+  updatedAt: string;
+}
+
+// ============================================
+// TAX
+// ============================================
+
+export interface ShopwareTax {
+  id: string;
+  taxRate: number;
+  name: string;
+  position?: number;
+}
+
+// ============================================
+// MANUFACTURER
+// ============================================
+
+export interface ShopwareManufacturer {
+  id: string;
+  versionId?: string;
+  mediaId?: string;
+  link?: string;
+  name?: string;
+  description?: string;
+  translations?: Record<string, { name: string; description?: string }>;
+}
+
+// ============================================
+// UNIT
+// ============================================
+
+export interface ShopwareUnit {
+  id: string;
+  shortCode: string;
+  name?: string;
+  translations?: Record<string, { shortCode: string; name?: string }>;
+}
+
+// ============================================
+// CURRENCY
+// ============================================
+
+export interface ShopwareCurrency {
+  id: string;
+  isoCode: string;
+  factor: number;
+  symbol: string;
+  shortName: string;
+  name: string;
+  position: number;
+  isSystemDefault: boolean;
+}
+
+// ============================================
+// API RESPONSES
+// ============================================
+
+export interface ShopwareApiResponse<T> {
+  data: T;
+  included?: unknown[];
+  links?: ShopwareLinks;
+  meta?: ShopwareMeta;
+}
+
+export interface ShopwareListResponse<T> {
+  data: T[];
+  total: number;
+  aggregations?: unknown[];
+  links?: ShopwareLinks;
+  meta?: ShopwareMeta;
+}
+
+export interface ShopwareLinks {
+  first?: string;
+  last?: string;
+  next?: string;
+  prev?: string;
+  self?: string;
+}
+
+export interface ShopwareMeta {
+  totalCountMode?: number;
+  total?: number;
+}
+
+export interface ShopwareSearchCriteria {
+  page?: number;
+  limit?: number;
+  term?: string;
+  filter?: ShopwareFilter[];
+  sort?: ShopwareSort[];
+  associations?: Record<string, ShopwareSearchCriteria>;
+  includes?: Record<string, string[]>;
+  ids?: string[];
+}
+
+export interface ShopwareFilter {
+  type: 'equals' | 'equalsAny' | 'contains' | 'range' | 'not' | 'multi' | 'prefix' | 'suffix';
+  field: string;
+  value: unknown;
+}
+
+export interface ShopwareSort {
+  field: string;
+  order: 'ASC' | 'DESC';
+  naturalSorting?: boolean;
+}
+
+// ============================================
+// SYNC OPERATION RESULTS
+// ============================================
+
+export interface ShopwareSyncResult {
+  id: string;
+  productNumber: string;
+  action: 'create' | 'update' | 'skip' | 'error';
+  success: boolean;
+  error?: string;
+  details?: Record<string, unknown>;
+}
+
+// ============================================
+// AUTHENTICATION
+// ============================================
+
+export interface ShopwareCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+
+export interface ShopwareAuthResponse {
+  token_type: string;
+  expires_in: number;
+  access_token: string;
+}
+
+// ============================================
+// DEFAULTS
+// ============================================
+
+export const DEFAULT_CURRENCY_ID = ''; // Will be set from Shopware config
+export const DEFAULT_TAX_ID = ''; // Will be set from Shopware config
+export const DEFAULT_LANGUAGE_ID = ''; // Will be set from Shopware config
+
+// Common currency IDs (typically these UUIDs in Shopware)
+export const CURRENCY_ISO_TO_ID: Record<string, string> = {
+  EUR: 'b7d2554b0ce847cd82f3ac9bd1c0dfca', // Example, actual ID depends on installation
+  USD: '', // Set from config
+  GBP: '', // Set from config
+};

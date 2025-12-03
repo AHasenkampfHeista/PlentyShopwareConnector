@@ -1,0 +1,26 @@
+{
+  "name": "plenty-shopware-connector",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:scheduler": "npm run dev --workspace=packages/scheduler",
+    "dev:worker": "npm run dev --workspace=packages/sync-worker",
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "lint": "eslint packages/**/*.ts",
+    "migrate": "cd packages/shared && npx prisma migrate deploy",
+    "docker:up": "docker-compose -f docker/docker-compose.yml up -d",
+    "docker:down": "docker-compose -f docker/docker-compose.yml down"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.3",
+    "eslint": "^8.55.0",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "prettier": "^3.1.1"
+  }
+}

@@ -1,0 +1,262 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id                    String   @id @default(uuid())
+  name                  String
+  plentyUrl             String
+  plentyCredentials     String   // Encrypted JSON
+  shopwareUrl           String
+  shopwareCredentials   String   // Encrypted JSON
+  status                TenantStatus @default(ACTIVE)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  schedules             SyncSchedule[]
+  syncJobs              SyncJob[]
+  syncMappings          SyncMapping[]
+  syncLogs              SyncLog[]
+
+  @@index([status])
+}
+
+enum TenantStatus {
+  ACTIVE
+  PAUSED
+  SUSPENDED
+}
+
+model SyncSchedule {
+  id                    String   @id @default(uuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  syncType              SyncType
+  cronSchedule          String   // "0 3 * * *" or "*/5 * * * *"
+  lastRunAt             DateTime?
+  nextRunAt             DateTime?
+  enabled               Boolean  @default(true)
+  direction             SyncDirection
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  jobs                  SyncJob[]
+
+  @@unique([tenantId, syncType, direction])
+  @@index([nextRunAt, enabled])
+  @@index([tenantId, enabled])
+}
+
+enum SyncType {
+  FULL_PRODUCT
+  STOCK
+  ORDER
+  CUSTOMER
+  CATEGORY
+  PRICE
+  PRODUCT_DELTA
+  CONFIG
+}
+
+enum SyncDirection {
+  PLENTY_TO_SHOPWARE
+  SHOPWARE_TO_PLENTY
+  BI_DIRECTIONAL
+}
+
+model SyncJob {
+  id                    String   @id @default(uuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scheduleId            String?
+  schedule              SyncSchedule? @relation(fields: [scheduleId], references: [id])
+  syncType              SyncType
+  direction             SyncDirection
+  status                SyncStatus @default(PENDING)
+  errorMessage          String?
+  startedAt             DateTime?
+  completedAt           DateTime?
+  createdAt             DateTime @default(now())
+
+  @@index([tenantId, status])
+  @@index([status, createdAt])
+  @@index([scheduleId])
+}
+
+enum SyncStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model SyncMapping {
+  id                    String   @id @default(uuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  entityType            SyncType
+  plentyField           String
+  shopwareField         String
+  transformationRule    Json?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([tenantId, entityType, plentyField])
+  @@index([tenantId, entityType])
+}
+
+model SyncLog {
+  id                    String   @id @default(uuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  jobId                 String
+  entityType            SyncType
+  entityId              String   // ID in source system
+  action                String
+  success               Boolean
+  details               Json
+  createdAt             DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([jobId])
+}
+
+model MockShopwareProduct {
+  id                    String   @id @default(uuid())
+  tenantId              String
+  sku                   String
+  productNumber         String
+  name                  String
+  description           String?
+  priceGross            Float
+  priceNet              Float?
+  currency              String   @default("EUR")
+  stock                 Int
+  active                Boolean  @default(true)
+  plentyItemId          Int?
+  plentyVariationId     Int?
+  rawPlentyData         Json?
+  rawShopwareData       Json
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+}
+
+model PlentyCategory {
+  id                    Int
+  tenantId              String
+  parentId              Int?
+  level                 Int?
+  type                  String?
+  linklist              Boolean?
+  right                 String?
+  sitemap               Boolean?
+  hasChildren           Boolean?
+  names                 Json      // Localized names { lang: name }
+  rawData               Json      // Full raw API response
+  syncedAt              DateTime
+
+  @@id([tenantId, id])
+  @@index([tenantId])
+}
+
+model PlentyAttribute {
+  id                         Int
+  tenantId                   String
+  backendName                String?
+  position                   Int?
+  isSurchargePercental       Boolean?
+  isLinkableToImage          Boolean?
+  amazonAttribute            String?
+  fruugoAttribute            String?
+  pixmaniaAttribute          String?
+  googleShoppingAttribute    String?
+  attributeValues            Json?     // Array of attribute value objects
+  names                      Json      // Localized names { lang: name }
+  rawData                    Json
+  syncedAt                   DateTime
+
+  @@id([tenantId, id])
+  @@index([tenantId])
+}
+
+model PlentySalesPrice {
+  id                    Int
+  tenantId              String
+  position              Int?
+  minimumOrderQuantity  Int?
+  type                  String?
+  isCustomerPrice       Boolean?
+  isDisplayedByDefault  Boolean?
+  isLiveConversion      Boolean?
+  currency              String?
+  countryIds            Int[]
+  customerClassIds      Int[]
+  referrerIds           Float[]
+  names                 Json      // Localized names { lang: name }
+  rawData               Json
+  syncedAt              DateTime
+
+  @@id([tenantId, id])
+  @@index([tenantId])
+}
+
+model PlentyManufacturer {
+  id                    Int
+  tenantId              String
+  name                  String?
+  externalName          String?
+  logo                  String?
+  url                   String?
+  street                String?
+  houseNo               String?
+  postcode              String?
+  town                  String?
+  phoneNumber           String?
+  faxNumber             String?
+  email                 String?
+  countryId             Int?
+  pixmaniaBrandId       Int?
+  neckermannBrandId     Int?
+  position              Int?
+  comment               String?
+  laRedouteBrandId      Int?
+  rawData               Json
+  syncedAt              DateTime
+
+  @@id([tenantId, id])
+  @@index([tenantId])
+}
+
+model PlentyUnit {
+  id                       Int
+  tenantId                 String
+  position                 Int?
+  unitOfMeasurement        String?
+  isDecimalPlacesAllowed   Boolean?
+  names                    Json      // Localized names { lang: name }
+  rawData                  Json
+  syncedAt                 DateTime
+
+  @@id([tenantId, id])
+  @@index([tenantId])
+}
+
+model SyncState {
+  id                    String   @id @default(uuid())
+  tenantId              String
+  syncType              SyncType
+  lastSyncAt            DateTime?
+  lastSuccessfulSyncAt  DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([tenantId, syncType])
+}
