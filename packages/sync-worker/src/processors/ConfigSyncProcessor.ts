@@ -128,9 +128,9 @@ export class ConfigSyncProcessor {
       }
     }
 
-    // Convert Plenty API string booleans ("Y"/"N") to actual booleans
-    const linklist = category.linklist === 'Y' || category.linklist === true;
-    const sitemap = category.sitemap === 'Y' || category.sitemap === true;
+    // Use boolean values from category
+    const linklist = category.linklist;
+    const sitemap = category.sitemap;
 
     await this.prisma.plentyCategory.upsert({
       where: {

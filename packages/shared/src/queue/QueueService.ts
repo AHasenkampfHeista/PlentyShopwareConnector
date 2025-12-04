@@ -1,6 +1,6 @@
 import { Queue, Worker, Job, QueueEvents, JobsOptions } from 'bullmq';
 import Redis from 'ioredis';
-import { logger, createLogger } from '../utils/logger';
+import { createLogger } from '../utils/logger';
 import { SyncJobData } from '../types/sync';
 
 const DEFAULT_QUEUE_NAME = 'sync-jobs';

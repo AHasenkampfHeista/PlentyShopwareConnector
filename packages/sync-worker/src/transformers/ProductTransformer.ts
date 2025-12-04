@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { getPrismaClient, createLogger } from '@connector/shared';
 import { PlentyVariation } from '@connector/shared';
-import { ShopwareProduct, ShopwarePrice } from '@connector/shared';
+import { ShopwareProduct } from '@connector/shared';
 import { FieldMapping, TransformationRule } from '@connector/shared';
 
 const DEFAULT_CURRENCY_ID = 'EUR';
@@ -260,10 +260,10 @@ export class ProductTransformer {
             ? this.applyTransformation(value, mapping.transformationRule)
             : value;
 
-          this.setNestedValue(product, mapping.shopwareField, transformedValue);
+          this.setNestedValue(product as unknown as Record<string, unknown>, mapping.shopwareField, transformedValue);
         } else if (mapping.defaultValue !== undefined) {
           // Use default value if source value is undefined
-          this.setNestedValue(product, mapping.shopwareField, mapping.defaultValue);
+          this.setNestedValue(product as unknown as Record<string, unknown>, mapping.shopwareField, mapping.defaultValue);
         }
       } catch (error) {
         this.log.warn('Failed to apply mapping', {

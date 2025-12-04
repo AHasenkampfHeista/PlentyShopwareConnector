@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
-import { logger, createLogger } from '../utils/logger';
+import { createLogger } from '../utils/logger';
 import {
   PlentyCredentials,
   PlentyAuthResponse,
@@ -130,7 +130,24 @@ export class PlentyClient {
         return response.data;
       } catch (error) {
         const axiosError = error as AxiosError;
-        lastError = new Error(axiosError.message);
+
+        // Log detailed error information
+        const errorDetails = {
+          status: axiosError.response?.status,
+          statusText: axiosError.response?.statusText,
+          data: axiosError.response?.data,
+          endpoint,
+          params,
+        };
+
+        this.log.error('API request failed', errorDetails);
+
+        // Also console.error for visibility
+        console.error('PlentyMarkets API Error:', JSON.stringify(errorDetails, null, 2));
+
+        lastError = new Error(
+          `${axiosError.message} - ${JSON.stringify(axiosError.response?.data || {})}`
+        );
 
         // Don't retry on client errors (4xx) except 429 (rate limit)
         if (
@@ -189,8 +206,8 @@ export class PlentyClient {
       queryParams.with = params.with;
     }
 
-    if (params.updatedAt) {
-      queryParams.updatedAt = params.updatedAt;
+    if (params.updatedBetween) {
+      queryParams.updatedBetween = params.updatedBetween;
     }
 
     if (params.isActive !== undefined) {
@@ -258,15 +275,19 @@ export class PlentyClient {
     withRelations: string[] = [
       'variationSalesPrices',
       'variationBarcodes',
-      'variationStock',
       'variationAttributeValues',
       'variationCategories',
+      // Removed: 'stock', 'item', 'images' - testing minimal params
     ]
   ): Promise<PlentyVariation[]> {
     this.log.info('Fetching delta variations', { since: since.toISOString() });
 
+    // Format updatedBetween with just start date (API will use "now" as end date)
+    // Can use unix timestamp or ISO 8601 format
+    const updatedBetween = Math.floor(since.getTime() / 1000).toString();
+
     return this.getAllVariations({
-      updatedAt: since.toISOString(),
+      updatedBetween,
       with: withRelations.join(','),
     });
   }
@@ -425,7 +446,7 @@ export class PlentyClient {
   /**
    * Get stock for all variations in a warehouse
    */
-  async getStock(warehouseId?: number): Promise<PlentyVariation[]> {
+  async getStock(_warehouseId?: number): Promise<PlentyVariation[]> {
     const params: PlentyVariationQueryParams = {
       with: 'variationStock',
       itemsPerPage: DEFAULT_ITEMS_PER_PAGE,

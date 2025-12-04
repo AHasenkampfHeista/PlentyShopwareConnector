@@ -16,9 +16,14 @@ export interface IShopwareClient {
   createProduct(product: ShopwareProduct): Promise<ShopwareSyncResult>;
 
   /**
-   * Update an existing product
+   * Update an existing product by ID
    */
   updateProduct(id: string, product: Partial<ShopwareProduct>): Promise<ShopwareSyncResult>;
+
+  /**
+   * Update an existing product by SKU
+   */
+  updateProductBySku(sku: string, product: Partial<ShopwareProduct>): Promise<ShopwareSyncResult>;
 
   /**
    * Get product by SKU

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { PrismaClient, SyncStatus, TenantStatus } from '@prisma/client';
 import { parseExpression } from 'cron-parser';
-import { logger, QueueService, decryptJSON, SyncJobData } from '@connector/shared';
+import { logger, QueueService, SyncJobData } from '@connector/shared';
 
 // Configuration
 const SCHEDULER_INTERVAL_MS = parseInt(process.env.SCHEDULER_INTERVAL_MS || '60000', 10);
@@ -59,7 +59,43 @@ async function checkAndCreateJobs(): Promise<void> {
     // Process each due schedule
     for (const schedule of dueSchedules) {
       try {
-        // Create sync job record in database
+        // Check if there's already a pending or processing job for this tenant + sync type
+        const existingJob = await prisma.syncJob.findFirst({
+          where: {
+            tenantId: schedule.tenantId,
+            syncType: schedule.syncType,
+            status: {
+              in: [SyncStatus.PENDING, SyncStatus.PROCESSING],
+            },
+          },
+        });
+
+        // Calculate next run time
+        const nextRun = calculateNextRun(schedule.cronSchedule);
+
+        if (existingJob) {
+          // Job already exists, skip creation but update schedule
+          logger.info('Job already exists, skipping creation', {
+            existingJobId: existingJob.id,
+            tenantId: schedule.tenantId,
+            syncType: schedule.syncType,
+            existingJobStatus: existingJob.status,
+            nextRunAt: nextRun.toISOString(),
+            cycleId,
+          });
+
+          // Update schedule's nextRunAt so it keeps tracking
+          await prisma.syncSchedule.update({
+            where: { id: schedule.id },
+            data: {
+              nextRunAt: nextRun,
+            },
+          });
+
+          continue;
+        }
+
+        // No existing job, create a new one
         const syncJob = await prisma.syncJob.create({
           data: {
             tenantId: schedule.tenantId,
@@ -87,9 +123,6 @@ async function checkAndCreateJobs(): Promise<void> {
         await queueService.addJob(jobData, {
           priority: schedule.priority,
         });
-
-        // Calculate next run time
-        const nextRun = calculateNextRun(schedule.cronSchedule);
 
         // Update schedule with last run and next run times
         await prisma.syncSchedule.update({

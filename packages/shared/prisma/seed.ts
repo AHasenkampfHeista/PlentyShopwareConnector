@@ -7,7 +7,7 @@
  */
 
 import { PrismaClient, TenantStatus, SyncType, SyncDirection } from '@prisma/client';
-import { encrypt, encryptJSON } from '../src/utils/encryption';
+import { encryptJSON } from '../src/utils/encryption';
 
 const prisma = new PrismaClient();
 

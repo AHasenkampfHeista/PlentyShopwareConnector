@@ -406,7 +406,7 @@ export interface PlentyVariationQueryParams {
   page?: number;
   itemsPerPage?: number;
   with?: string; // Comma-separated: variationSalesPrices,variationBarcodes,variationStock
-  updatedAt?: string; // ISO 8601 date for delta sync
+  updatedBetween?: string; // Unix timestamp or ISO 8601. Format: "from" or "from,to". Example: "1451606400" or "1451606400,1456790400"
   isActive?: boolean;
   isMain?: boolean;
   itemId?: number;
@@ -421,7 +421,7 @@ export interface PlentyCategoryQueryParams {
   parentId?: number;
   type?: string;
   with?: string;
-  updatedAt?: string;
+  updatedBetween?: string; // Unix timestamp or ISO 8601. Format: "from" or "from,to". Example: "1451606400" or "1451606400,1456790400"
   lang?: string;
 }
 

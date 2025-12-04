@@ -1,0 +1,15 @@
+{
+    "errors": [
+        {
+            "error": "\nInvalid `this.prisma.mockShopwareProduct.update()` invocation in\nC:\\Users\\alexa\\Documents\\RandomStuff\\PlentyShopwareConnectorClaude\\packages\\shared\\src\\clients\\MockShopwareClient.ts:110:61\n\n  107 \n  108 const updateData = this.buildUpdateData(product);\n  109 \n→ 110 const updated = await this.prisma.mockShopwareProduct.update(\nAn operation failed because it depends on one or more records that were required but not found. Record to update not found.",
+            "entityId": "7761",
+            "entityType": "variation"
+        }
+    ],
+    "success": false,
+    "duration": 1250,
+    "itemsFailed": 1,
+    "itemsCreated": 0,
+    "itemsUpdated": 0,
+    "itemsProcessed": 1
+}

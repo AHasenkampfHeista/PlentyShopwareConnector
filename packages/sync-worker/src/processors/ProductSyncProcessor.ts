@@ -8,7 +8,7 @@ import {
   IShopwareClient,
 } from '@connector/shared';
 import { PlentyVariation } from '@connector/shared';
-import { DecryptedSyncJobData, SyncResult, SyncError, FieldMapping } from '@connector/shared';
+import { DecryptedSyncJobData, SyncResult, FieldMapping } from '@connector/shared';
 import { ProductTransformer } from '../transformers/ProductTransformer';
 import { ConfigSyncProcessor } from './ConfigSyncProcessor';
 
@@ -16,10 +16,9 @@ const DEFAULT_BATCH_SIZE = 100;
 const DEFAULT_WITH_RELATIONS = [
   'variationSalesPrices',
   'variationBarcodes',
-  'variationStock',
   'variationAttributeValues',
   'variationCategories',
-  'variationTexts',
+  // Start with minimal params - these are confirmed valid
 ];
 
 export interface ProductSyncOptions {
@@ -240,8 +239,8 @@ export class ProductSyncProcessor {
       if (skipExisting) {
         return { action: 'skip', success: true };
       }
-      // Update existing product
-      const result = await shopware.updateProduct(product.productNumber, product);
+      // Update existing product by SKU
+      const result = await shopware.updateProductBySku(product.productNumber, product);
       return {
         action: result.action,
         success: result.success,
@@ -275,7 +274,7 @@ export class ProductSyncProcessor {
     return mappings.map((m) => ({
       plentyField: m.plentyField,
       shopwareField: m.shopwareField,
-      transformationRule: m.transformationRule as FieldMapping['transformationRule'],
+      transformationRule: m.transformationRule as unknown as FieldMapping['transformationRule'],
       isRequired: m.isRequired,
       defaultValue: m.defaultValue || undefined,
     }));
