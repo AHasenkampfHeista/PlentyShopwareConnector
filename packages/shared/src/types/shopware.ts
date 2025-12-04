@@ -273,6 +273,43 @@ export interface ShopwareSyncResult {
 }
 
 // ============================================
+// BULK SYNC
+// ============================================
+
+/**
+ * Product for bulk sync operations
+ * Includes optional ID - if provided, it's an update; if null/undefined, it's a create
+ */
+export interface ShopwareBulkProduct extends Partial<ShopwareProduct> {
+  id?: string; // Shopware UUID (null/undefined = create, uuid = update)
+  productNumber: string; // Required
+  stock: number; // Required
+  active: boolean; // Required
+  price: ShopwarePrice[]; // Required
+  _plentyItemId?: number; // Internal tracking only
+  _plentyVariationId?: number; // Internal tracking only
+}
+
+/**
+ * Result from bulk sync operation
+ */
+export interface ShopwareBulkSyncResult {
+  success: boolean;
+  results: ShopwareBulkItemResult[];
+}
+
+/**
+ * Individual item result from bulk sync
+ */
+export interface ShopwareBulkItemResult {
+  productNumber: string;
+  shopwareId: string; // UUID returned by Shopware (created or updated)
+  action: 'create' | 'update';
+  success: boolean;
+  error?: string;
+}
+
+// ============================================
 // AUTHENTICATION
 // ============================================
 

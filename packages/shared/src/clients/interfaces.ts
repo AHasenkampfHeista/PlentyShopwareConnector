@@ -1,4 +1,10 @@
-import { ShopwareProduct, ShopwareStockUpdate, ShopwareSyncResult } from '../types/shopware';
+import {
+  ShopwareProduct,
+  ShopwareStockUpdate,
+  ShopwareSyncResult,
+  ShopwareBulkProduct,
+  ShopwareBulkSyncResult,
+} from '../types/shopware';
 
 /**
  * Interface for Shopware clients (Mock and Real)
@@ -34,6 +40,12 @@ export interface IShopwareClient {
    * Check if product exists by SKU
    */
   productExists(sku: string): Promise<boolean>;
+
+  /**
+   * Bulk sync products (create or update in batch)
+   * Uses Shopware's upsert pattern - no need to check existence
+   */
+  bulkSyncProducts(products: ShopwareBulkProduct[]): Promise<ShopwareBulkSyncResult>;
 
   /**
    * Update stock for a product

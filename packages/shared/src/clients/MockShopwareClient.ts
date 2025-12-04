@@ -2,7 +2,14 @@ import { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../database/client';
 import { createLogger } from '../utils/logger';
 import { IShopwareClient, MockShopwareClientConfig } from './interfaces';
-import { ShopwareProduct, ShopwareStockUpdate, ShopwareSyncResult } from '../types/shopware';
+import {
+  ShopwareProduct,
+  ShopwareStockUpdate,
+  ShopwareSyncResult,
+  ShopwareBulkProduct,
+  ShopwareBulkSyncResult,
+  ShopwareBulkItemResult,
+} from '../types/shopware';
 
 /**
  * Mock Shopware Client
@@ -224,6 +231,118 @@ export class MockShopwareClient implements IShopwareClient {
     updateData.rawShopwareData = product;
 
     return updateData;
+  }
+
+  /**
+   * Bulk sync products (create or update in batch)
+   * Implements upsert pattern - creates if ID is not provided, updates if ID exists
+   */
+  async bulkSyncProducts(products: ShopwareBulkProduct[]): Promise<ShopwareBulkSyncResult> {
+    this.log.info('Mock Shopware: Bulk syncing products', { count: products.length });
+
+    const results: ShopwareBulkItemResult[] = [];
+
+    // Process each product in a transaction for consistency
+    try {
+      for (const product of products) {
+        try {
+          let shopwareId: string;
+          let action: 'create' | 'update';
+
+          // If ID is provided, it's an update; otherwise it's a create
+          if (product.id) {
+            // Update existing product
+            const updateData = this.buildUpdateData(product);
+            const updated = await this.prisma.mockShopwareProduct.update({
+              where: { id: product.id },
+              data: updateData,
+            });
+            shopwareId = updated.id;
+            action = 'update';
+          } else {
+            // Create new product or update if SKU exists
+            const mainPrice = product.price?.[0];
+            const priceGross = mainPrice?.gross ?? 0;
+            const priceNet = mainPrice?.net ?? priceGross / 1.19;
+
+            const created = await this.prisma.mockShopwareProduct.upsert({
+              where: {
+                tenantId_sku: {
+                  tenantId: this.tenantId,
+                  sku: product.productNumber,
+                },
+              },
+              create: {
+                tenantId: this.tenantId,
+                sku: product.productNumber,
+                productNumber: product.productNumber,
+                name: product.name || '',
+                description: product.description || undefined,
+                priceGross: priceGross,
+                priceNet: priceNet,
+                currency: mainPrice?.currencyId || 'EUR',
+                stock: product.stock || 0,
+                active: product.active ?? true,
+                plentyItemId: product._plentyItemId || undefined,
+                plentyVariationId: product._plentyVariationId || undefined,
+                rawShopwareData: product as unknown as object,
+              },
+              update: {
+                name: product.name,
+                description: product.description,
+                priceGross: priceGross,
+                priceNet: priceNet,
+                stock: product.stock,
+                active: product.active,
+                rawShopwareData: product as unknown as object,
+              },
+            });
+            shopwareId = created.id;
+            action = 'create';
+          }
+
+          results.push({
+            productNumber: product.productNumber,
+            shopwareId,
+            action,
+            success: true,
+          });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          this.log.error('Mock Shopware: Failed to sync product in bulk', {
+            sku: product.productNumber,
+            error: errorMessage,
+          });
+
+          results.push({
+            productNumber: product.productNumber,
+            shopwareId: product.id || '',
+            action: product.id ? 'update' : 'create',
+            success: false,
+            error: errorMessage,
+          });
+        }
+      }
+
+      const successCount = results.filter((r) => r.success).length;
+      const failCount = results.filter((r) => !r.success).length;
+
+      this.log.info('Mock Shopware: Bulk sync completed', {
+        total: products.length,
+        success: successCount,
+        failed: failCount,
+      });
+
+      return {
+        success: failCount === 0,
+        results,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.log.error('Mock Shopware: Bulk sync transaction failed', { error: errorMessage });
+
+      throw new Error(`Bulk sync failed: ${errorMessage}`);
+    }
   }
 
   /**

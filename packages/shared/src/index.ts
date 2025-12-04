@@ -12,3 +12,6 @@ export * from './queue';
 
 // Clients
 export * from './clients';
+
+// Services
+export * from './services';

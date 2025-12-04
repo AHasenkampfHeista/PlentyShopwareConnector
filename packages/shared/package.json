@@ -11,7 +11,8 @@
     "generate": "prisma generate",
     "push": "prisma db push",
     "seed": "tsx prisma/seed.ts",
-    "studio": "prisma studio"
+    "studio": "prisma studio",
+    "reset-sync-data": "tsx scripts/reset-sync-data.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.7.0",

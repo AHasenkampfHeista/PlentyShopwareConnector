@@ -8,11 +8,13 @@ import {
   IShopwareClient,
 } from '@connector/shared';
 import { PlentyVariation } from '@connector/shared';
-import { DecryptedSyncJobData, SyncResult, FieldMapping } from '@connector/shared';
+import { DecryptedSyncJobData, SyncResult, FieldMapping, ShopwareBulkProduct } from '@connector/shared';
 import { ProductTransformer } from '../transformers/ProductTransformer';
 import { ConfigSyncProcessor } from './ConfigSyncProcessor';
+import { ProductMappingService, ProductMappingRecord } from '@connector/shared';
 
 const DEFAULT_BATCH_SIZE = 100;
+const BULK_SYNC_BATCH_SIZE = 100; // Batch size for bulk sync operations
 const DEFAULT_WITH_RELATIONS = [
   'variationSalesPrices',
   'variationBarcodes',
@@ -35,11 +37,13 @@ export class ProductSyncProcessor {
   private prisma: PrismaClient;
   private transformer: ProductTransformer;
   private configProcessor: ConfigSyncProcessor;
+  private mappingService: ProductMappingService;
 
   constructor() {
     this.prisma = getPrismaClient();
     this.transformer = new ProductTransformer();
     this.configProcessor = new ConfigSyncProcessor();
+    this.mappingService = new ProductMappingService();
   }
 
   /**
@@ -118,50 +122,123 @@ export class ProductSyncProcessor {
 
       log.info('Fetched variations', { count: variations.length });
 
-      // Process each variation
-      for (const variation of variations) {
+      // Load existing mappings for all variations
+      const variationIds = variations.map((v) => v.id);
+      const existingMappings = await this.mappingService.getBatchMappings(
+        jobData.tenantId,
+        variationIds
+      );
+      log.info('Loaded existing mappings', { count: Object.keys(existingMappings).length });
+
+      // Split variations into batches
+      const batches: PlentyVariation[][] = [];
+      for (let i = 0; i < variations.length; i += BULK_SYNC_BATCH_SIZE) {
+        batches.push(variations.slice(i, i + BULK_SYNC_BATCH_SIZE));
+      }
+
+      log.info('Processing in batches', { batches: batches.length, batchSize: BULK_SYNC_BATCH_SIZE });
+
+      // Process each batch
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        log.debug('Processing batch', { batch: batchIndex + 1, total: batches.length, items: batch.length });
+
         try {
-          const syncResult = await this.syncVariation(
-            variation,
-            jobData.tenantId,
-            shopware,
-            mappings,
-            options.skipExisting
-          );
+          // Transform all variations in batch
+          const bulkProducts: ShopwareBulkProduct[] = [];
+          for (const variation of batch) {
+            const product = await this.transformer.transform(variation, jobData.tenantId, mappings);
 
-          result.itemsProcessed++;
+            // Add Shopware ID from mapping if exists
+            const mapping = existingMappings[variation.id];
+            if (mapping) {
+              product.id = mapping.shopwareProductId;
+            }
 
-          if (syncResult.action === 'create') {
-            result.itemsCreated++;
-          } else if (syncResult.action === 'update') {
-            result.itemsUpdated++;
-          } else if (syncResult.action === 'error') {
+            // Add Plenty IDs for tracking
+            product._plentyItemId = variation.itemId;
+            product._plentyVariationId = variation.id;
+
+            bulkProducts.push(product as ShopwareBulkProduct);
+          }
+
+          // Bulk sync the batch
+          const bulkResult = await shopware.bulkSyncProducts(bulkProducts);
+
+          // Process results and update mappings
+          const mappingRecords: ProductMappingRecord[] = [];
+          for (const itemResult of bulkResult.results) {
+            result.itemsProcessed++;
+
+            if (itemResult.success) {
+              if (itemResult.action === 'create') {
+                result.itemsCreated++;
+              } else {
+                result.itemsUpdated++;
+              }
+
+              // Find the corresponding product to get Plenty IDs
+              const product = bulkProducts.find((p) => p.productNumber === itemResult.productNumber);
+              if (product && product._plentyVariationId) {
+                mappingRecords.push({
+                  plentyItemId: product._plentyItemId || 0,
+                  plentyVariationId: product._plentyVariationId,
+                  shopwareProductId: itemResult.shopwareId,
+                  shopwareProductNumber: itemResult.productNumber,
+                  lastSyncAction: itemResult.action,
+                });
+              }
+
+              // Log success
+              await this.logSyncOperation(
+                jobData.tenantId,
+                jobData.id,
+                product?._plentyVariationId?.toString() || itemResult.productNumber,
+                itemResult.action,
+                true,
+                itemResult
+              );
+            } else {
+              result.itemsFailed++;
+              result.errors.push({
+                entityId: itemResult.productNumber,
+                entityType: 'variation',
+                error: itemResult.error || 'Unknown error',
+              });
+
+              // Log failure
+              await this.logSyncOperation(
+                jobData.tenantId,
+                jobData.id,
+                itemResult.productNumber,
+                'error',
+                false,
+                itemResult
+              );
+            }
+          }
+
+          // Update mappings for successful syncs
+          if (mappingRecords.length > 0) {
+            await this.mappingService.upsertMappings(jobData.tenantId, mappingRecords);
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          log.error('Failed to process batch', {
+            batch: batchIndex + 1,
+            error: errorMessage,
+          });
+
+          // Mark all items in batch as failed
+          for (const variation of batch) {
+            result.itemsProcessed++;
             result.itemsFailed++;
             result.errors.push({
               entityId: variation.id.toString(),
               entityType: 'variation',
-              error: syncResult.error || 'Unknown error',
+              error: errorMessage,
             });
           }
-
-          // Log sync operation
-          await this.logSyncOperation(
-            jobData.tenantId,
-            jobData.id,
-            variation.id.toString(),
-            syncResult.action,
-            syncResult.success,
-            syncResult
-          );
-        } catch (error) {
-          result.itemsFailed++;
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-          result.errors.push({
-            entityId: variation.id.toString(),
-            entityType: 'variation',
-            error: errorMessage,
-          });
-          log.error('Failed to sync variation', { variationId: variation.id, error: errorMessage });
         }
       }
 

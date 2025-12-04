@@ -35,6 +35,7 @@ model Tenant {
   plentyManufacturers   PlentyManufacturer[]
   plentyUnits           PlentyUnit[]
   mockShopwareProducts  MockShopwareProduct[]
+  productMappings       ProductMapping[]
 
   @@index([status])
   @@map("tenants")
@@ -367,4 +368,36 @@ model MockShopwareProduct {
   @@index([tenantId, sku])
   @@index([tenantId, plentyVariationId])
   @@map("mock_shopware_products")
+}
+
+// ============================================
+// PRODUCT MAPPING (Plenty ↔ Shopware)
+// ============================================
+
+model ProductMapping {
+  id                    String   @id @default(uuid())
+  tenantId              String   @map("tenant_id")
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // PlentyMarkets identifiers
+  plentyItemId          Int      @map("plenty_item_id")
+  plentyVariationId     Int      @map("plenty_variation_id")
+
+  // Shopware identifiers
+  shopwareProductId     String   @map("shopware_product_id") // UUID from Shopware
+  shopwareProductNumber String   @map("shopware_product_number") // SKU
+
+  // Sync metadata
+  lastSyncedAt          DateTime @map("last_synced_at")
+  lastSyncAction        String   @map("last_sync_action") // 'create', 'update'
+
+  // Timestamps
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, plentyVariationId])
+  @@unique([tenantId, shopwareProductId])
+  @@index([tenantId, shopwareProductNumber])
+  @@index([tenantId, plentyItemId])
+  @@map("product_mappings")
 }
