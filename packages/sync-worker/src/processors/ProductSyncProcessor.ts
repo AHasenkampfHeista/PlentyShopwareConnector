@@ -20,6 +20,7 @@ const DEFAULT_WITH_RELATIONS = [
   'variationBarcodes',
   'variationAttributeValues',
   'variationCategories',
+  'stock'
   // Start with minimal params - these are confirmed valid
 ];
 
@@ -106,21 +107,28 @@ export class ProductSyncProcessor {
       } else {
         // Delta sync - get last sync time
         const lastSyncAt = await this.getLastSyncTime(jobData.tenantId);
-        log.info('Starting delta product sync', { since: lastSyncAt?.toISOString() });
+        console.log(`\n>>> lastSyncAt ${lastSyncAt}  <<<\n`);
 
         if (lastSyncAt) {
+          log.info('Starting delta product sync', { since: lastSyncAt.toISOString() });
+          console.log(`\n>>> FETCHING since ${lastSyncAt.toISOString()}  <<<\n`);
           variations = await plenty.getVariationsDelta(lastSyncAt, DEFAULT_WITH_RELATIONS);
         } else {
-          // No previous sync, do full sync
-          log.warn('No previous sync found, performing full sync');
+          // No previous sync state found - do full sync
+          log.warn(
+            'No previous sync state found. This is expected after a reset. ' +
+            'Performing FULL sync (not delta) to fetch all variations.'
+          );
           variations = await plenty.getAllVariations({
             with: DEFAULT_WITH_RELATIONS.join(','),
             itemsPerPage: options.batchSize || DEFAULT_BATCH_SIZE,
           });
+          log.info('Full sync completed, sync state will be created after successful sync');
         }
       }
 
       log.info('Fetched variations', { count: variations.length });
+      console.log(`\n>>> FETCHED ${variations.length} VARIATIONS <<<\n`);
 
       // Load existing mappings for all variations
       const variationIds = variations.map((v) => v.id);

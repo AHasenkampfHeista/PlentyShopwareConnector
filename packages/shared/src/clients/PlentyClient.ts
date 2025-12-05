@@ -126,6 +126,15 @@ export class PlentyClient {
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
+        // Log the full request URL for debugging
+        const url = new URL(endpoint, this.baseUrl);
+        if (params) {
+          Object.entries(params).forEach(([key, value]) => {
+            url.searchParams.append(key, String(value));
+          });
+        }
+        console.log('Full Request URL:', url.toString());
+
         const response = await this.client.get<T>(endpoint, { params });
         return response.data;
       } catch (error) {
@@ -226,12 +235,24 @@ export class PlentyClient {
       queryParams.lang = params.lang;
     }
 
+    console.log('\n=== PLENTY API REQUEST ===');
+    console.log('Endpoint: /rest/items/variations');
+    console.log('Params:', JSON.stringify(queryParams, null, 2));
     this.log.debug('Fetching variations', { params: queryParams });
 
-    return this.get<PlentyPaginatedResponse<PlentyVariation>>(
+    const response = await this.get<PlentyPaginatedResponse<PlentyVariation>>(
       '/rest/items/variations',
       queryParams
     );
+
+    console.log('=== PLENTY API RESPONSE ===');
+    console.log('Page:', response.page);
+    console.log('Total Count:', response.totalsCount);
+    console.log('Entries on this page:', response.entries.length);
+    console.log('Is Last Page:', response.isLastPage);
+    console.log('===========================\n');
+
+    return response;
   }
 
   /**
@@ -280,11 +301,17 @@ export class PlentyClient {
       // Removed: 'stock', 'item', 'images' - testing minimal params
     ]
   ): Promise<PlentyVariation[]> {
-    this.log.info('Fetching delta variations', { since: since.toISOString() });
+    console.log('\n>>> getVariationsDelta called <<<');
+    console.log('Input Date (since):', since);
 
-    // Format updatedBetween with just start date (API will use "now" as end date)
-    // Can use unix timestamp or ISO 8601 format
-    const updatedBetween = Math.floor(since.getTime() / 1000).toString();
+    // Use Unix timestamp (seconds) - simpler and no encoding issues
+    // API accepts both Unix timestamp and ISO 8601 format
+    const unixTimestamp = Math.floor(since.getTime() / 1000);
+    const updatedBetween = unixTimestamp.toString();
+
+    console.log('Unix Timestamp:', updatedBetween);
+    console.log('Human readable:', new Date(unixTimestamp * 1000).toISOString());
+    this.log.info('Fetching delta variations', { since: new Date(unixTimestamp * 1000).toISOString() });
 
     return this.getAllVariations({
       updatedBetween,
@@ -448,7 +475,7 @@ export class PlentyClient {
    */
   async getStock(_warehouseId?: number): Promise<PlentyVariation[]> {
     const params: PlentyVariationQueryParams = {
-      with: 'variationStock',
+      with: 'stock',
       itemsPerPage: DEFAULT_ITEMS_PER_PAGE,
     };
 

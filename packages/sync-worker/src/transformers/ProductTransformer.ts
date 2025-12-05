@@ -230,7 +230,7 @@ export class ProductTransformer {
    * Calculate total stock from all warehouses
    */
   private calculateStock(variation: PlentyVariation): number {
-    const stockEntries = variation.variationStock || [];
+    const stockEntries = variation.stock || [];
 
     if (stockEntries.length === 0) {
       return 0;
@@ -238,7 +238,7 @@ export class ProductTransformer {
 
     // Sum up net stock from all warehouses
     return stockEntries.reduce((total, entry) => {
-      return total + (entry.stockNet || 0);
+      return total + (entry.netStock || 0);
     }, 0);
   }
 

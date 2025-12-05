@@ -28,11 +28,11 @@ async function main() {
     console.log('  - All synced products (mock_shopware_products)');
     console.log('  - All product mappings (product_mappings)');
     console.log('  - All sync jobs and logs');
-    console.log('  - All sync state (delta sync will restart)');
+    console.log('  - All sync state (next sync will be FULL, not delta)');
     console.log('  - All cached Plenty data (categories, attributes, etc.)');
     console.log('\nThe following will be PRESERVED:');
     console.log('  - Tenant configurations (credentials, URLs)');
-    console.log('  - Sync schedules');
+    console.log('  - Sync schedules (will be reset to run immediately)');
     console.log('  - Field mappings (sync_mappings)');
     console.log('\nPress Ctrl+C to cancel, or wait 5 seconds to continue...\n');
 
@@ -88,6 +88,21 @@ async function main() {
     const unitsCount = await prisma.plentyUnit.deleteMany({});
     log.info(`Deleted ${unitsCount.count} units`);
 
+    // Reset sync schedules so they run immediately
+    log.info('Resetting sync schedules...');
+    const scheduleUpdateResult = await prisma.syncSchedule.updateMany({
+      data: {
+        lastRunAt: null,
+        nextRunAt: null,
+      },
+    });
+    log.info(`Reset ${scheduleUpdateResult.count} sync schedules`);
+
+    // NOTE: We do NOT re-create sync_state entries here
+    // The worker will automatically create them on first run and do a full sync
+    // This ensures delta syncs truly fetch all data instead of only recently updated items
+    log.info('✨ Sync state cleared - next sync will be a full sync for each tenant');
+
     log.info('✅ Sync data reset complete!');
 
     // Summary
@@ -102,7 +117,9 @@ async function main() {
     console.log(`  Sales prices:       ${pricesCount.count}`);
     console.log(`  Manufacturers:      ${manufacturersCount.count}`);
     console.log(`  Units:              ${unitsCount.count}`);
-    console.log('\n✅ All sync data cleared. Tenant configs and schedules preserved.');
+    console.log(`  Schedules reset:    ${scheduleUpdateResult.count}`);
+    console.log('\n✅ All sync data cleared. Schedules reset to run immediately.');
+    console.log('✨ Next sync will be a FULL sync (not delta) for all tenants.');
 
   } catch (error) {
     log.error('Failed to reset sync data', { error });

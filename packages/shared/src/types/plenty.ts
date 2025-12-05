@@ -63,7 +63,7 @@ export interface PlentyVariation {
   item?: PlentyItem;
   variationSalesPrices?: PlentyVariationSalesPrice[];
   variationBarcodes?: PlentyVariationBarcode[];
-  variationStock?: PlentyVariationStock[];
+  stock?: PlentyVariationStock[];
   variationAttributeValues?: PlentyVariationAttributeValue[];
   variationCategories?: PlentyVariationCategory[];
   variationClients?: PlentyVariationClient[];
@@ -93,14 +93,17 @@ export interface PlentyVariationBarcode {
 
 export interface PlentyVariationStock {
   variationId: number;
+  itemId: number;
   warehouseId: number;
-  stockPhysical: number;
+  reservedListing: number;
+  reservedBundles: number;
+  valueOfGoods: number;
+  purchasePrice: number;
+  physicalStock: number;
   reservedStock: number;
-  reservedEbay: number;
+  netStock: number;
   reorderLevel: number;
-  stockNet: number;
-  warehousePriority: number;
-  updatedAt: string;
+  deltaReorderLevel: number;
 }
 
 export interface PlentyVariationAttributeValue {
@@ -405,7 +408,7 @@ export interface PlentyUnitName {
 export interface PlentyVariationQueryParams {
   page?: number;
   itemsPerPage?: number;
-  with?: string; // Comma-separated: variationSalesPrices,variationBarcodes,variationStock
+  with?: string; // Comma-separated: variationSalesPrices,variationBarcodes,stock
   updatedBetween?: string; // Unix timestamp or ISO 8601. Format: "from" or "from,to". Example: "1451606400" or "1451606400,1456790400"
   isActive?: boolean;
   isMain?: boolean;
