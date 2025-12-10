@@ -13,7 +13,11 @@
     "lint": "eslint packages/**/*.ts",
     "migrate": "cd packages/shared && npx prisma migrate deploy",
     "docker:up": "docker-compose -f docker/docker-compose.yml up -d",
-    "docker:down": "docker-compose -f docker/docker-compose.yml down"
+    "docker:down": "docker-compose -f docker/docker-compose.yml down",
+    "manage-schedules": "tsx scripts/manage-sync-schedules.ts",
+    "trigger-config-sync": "tsx scripts/trigger-config-sync.ts",
+    "trigger-full-sync": "tsx scripts/trigger-full-sync.ts",
+    "trigger-delta-sync": "tsx scripts/trigger-product-delta-sync.ts"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
@@ -21,6 +25,8 @@
     "eslint": "^8.55.0",
     "@typescript-eslint/eslint-plugin": "^6.15.0",
     "@typescript-eslint/parser": "^6.15.0",
-    "prettier": "^3.1.1"
+    "prettier": "^3.1.1",
+    "tsx": "^4.7.0",
+    "cron-parser": "^4.9.0"
   }
 }

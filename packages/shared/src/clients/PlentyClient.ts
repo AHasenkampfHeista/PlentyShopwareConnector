@@ -12,6 +12,7 @@ import {
   PlentySalesPrice,
   PlentyManufacturer,
   PlentyUnit,
+  PlentyStockManagementEntry,
 } from '../types/plenty';
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
@@ -480,6 +481,27 @@ export class PlentyClient {
     };
 
     return this.getAllVariations(params);
+  }
+
+  /**
+   * Get stock from stock management endpoint
+   * This endpoint provides more comprehensive stock data but doesn't support updatedAt filtering
+   * @param itemsPerPage - Number of items per page (default: 20000 to get all stocks at once)
+   */
+  async getStockManagement(itemsPerPage = 20000): Promise<PlentyStockManagementEntry[]> {
+    this.log.info('Fetching stock from stock management endpoint', { itemsPerPage });
+
+    const response = await this.get<PlentyPaginatedResponse<PlentyStockManagementEntry>>(
+      '/rest/stockmanagement/stock',
+      { itemsPerPage }
+    );
+
+    this.log.info('Fetched stock management entries', {
+      count: response.entries.length,
+      totalCount: response.totalsCount
+    });
+
+    return response.entries;
   }
 
   // ============================================

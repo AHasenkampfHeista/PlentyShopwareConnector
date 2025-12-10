@@ -407,12 +407,79 @@ export class MockShopwareClient implements IShopwareClient {
   }
 
   /**
-   * Update stock for a product
+   * Update stock for a product using product ID (preferred method)
+   * Uses the product UUID for direct, reliable lookups
+   */
+  async updateStockById(productId: string, stock: number): Promise<ShopwareSyncResult> {
+    try {
+      this.log.debug('Mock Shopware: Updating stock by ID', { productId, stock });
+
+      // Update directly using the product ID (UUID) - most reliable method
+      const updated = await this.prisma.mockShopwareProduct.update({
+        where: { id: productId },
+        data: { stock },
+      });
+
+      this.log.info('Mock Shopware: Stock updated', {
+        id: productId,
+        sku: updated.sku,
+        stock,
+      });
+
+      return {
+        id: updated.id,
+        productNumber: updated.sku,
+        action: 'update',
+        success: true,
+        details: { stock },
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.log.error('Mock Shopware: Failed to update stock', {
+        productId,
+        error: errorMessage
+      });
+
+      return {
+        id: productId,
+        productNumber: '',
+        action: 'error',
+        success: false,
+        error: errorMessage,
+      };
+    }
+  }
+
+  /**
+   * Update stock for a product using SKU (legacy method, prefer updateStockById)
+   * @deprecated Use updateStockById instead for more reliable updates
    */
   async updateStock(sku: string, stock: number): Promise<ShopwareSyncResult> {
     try {
-      this.log.debug('Mock Shopware: Updating stock', { sku, stock });
+      this.log.debug('Mock Shopware: Updating stock by SKU', { sku, stock });
 
+      // First check if product exists
+      const existing = await this.prisma.mockShopwareProduct.findUnique({
+        where: {
+          tenantId_sku: {
+            tenantId: this.tenantId,
+            sku,
+          },
+        },
+      });
+
+      if (!existing) {
+        this.log.warn('Mock Shopware: Product not found for stock update', { sku });
+        return {
+          id: '',
+          productNumber: sku,
+          action: 'skip',
+          success: false,
+          error: 'Product not found. Product must be synced before stock can be updated.',
+        };
+      }
+
+      // Update stock
       const updated = await this.prisma.mockShopwareProduct.update({
         where: {
           tenantId_sku: {
@@ -456,8 +523,8 @@ export class MockShopwareClient implements IShopwareClient {
     const results: ShopwareSyncResult[] = [];
 
     for (const update of updates) {
-      const sku = update.productNumber || update.id;
-      const result = await this.updateStock(sku, update.stock);
+      // Use product ID (UUID) for direct, reliable lookups
+      const result = await this.updateStockById(update.id, update.stock);
       results.push(result);
     }
 

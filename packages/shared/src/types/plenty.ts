@@ -442,3 +442,21 @@ export interface PlentyStockEntry {
   deltaStockPhysical: number;
   deltaStockReserved: number;
 }
+
+// Stock Management API response (from /rest/stockmanagement/stock)
+export interface PlentyStockManagementEntry {
+  itemId: number;
+  warehouseId: number;
+  stockPhysical: number;
+  reservedStock: number;
+  reservedEbay: number;
+  reorderDelta: number;
+  stockNet: number;
+  storehouse_type: string;
+  reordered: number;
+  reservedBundle: number;
+  averagePurchasePrice: number;
+  warehousePriority: string;
+  updatedAt: string;
+  variationId: number;
+}

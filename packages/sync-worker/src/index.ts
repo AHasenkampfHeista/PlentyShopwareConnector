@@ -11,6 +11,7 @@ import {
 } from '@connector/shared';
 import { ConfigSyncProcessor } from './processors/ConfigSyncProcessor';
 import { ProductSyncProcessor } from './processors/ProductSyncProcessor';
+import { StockSyncProcessor } from './processors/StockSyncProcessor';
 
 // Configuration
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '5', 10);
@@ -27,6 +28,7 @@ const queueService = new QueueService({
 // Initialize processors
 const configProcessor = new ConfigSyncProcessor();
 const productProcessor = new ProductSyncProcessor();
+const stockProcessor = new StockSyncProcessor();
 
 /**
  * Decrypt credentials from job data
@@ -88,8 +90,8 @@ async function processJob(job: Job<SyncJobData>): Promise<void> {
         break;
 
       case SyncType.STOCK:
-        log.warn('Stock sync not yet implemented');
-        result = { success: true, message: 'Stock sync not implemented' };
+        log.info('Routing to StockSyncProcessor');
+        result = await stockProcessor.process(decryptedJobData);
         break;
 
       case SyncType.ORDER:
