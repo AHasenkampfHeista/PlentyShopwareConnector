@@ -102,6 +102,9 @@ export interface ShopwareCategory {
   productAssignmentType?: string;
   type?: string;
   translations?: Record<string, ShopwareCategoryTranslation>;
+
+  // Plenty reference (internal use)
+  _plentyCategoryId?: number;
 }
 
 export interface ShopwareCategoryTranslation {
@@ -112,6 +115,18 @@ export interface ShopwareCategoryTranslation {
   keywords?: string;
 }
 
+export interface ShopwarePropertyGroup {
+  id: string;
+  name?: string;
+  displayType?: string; // 'text', 'color', 'image'
+  sortingType?: string; // 'alphanumeric', 'numeric', 'position'
+  position?: number;
+  translations?: Record<string, { name: string; description?: string }>;
+
+  // Plenty reference (internal use)
+  _plentyAttributeId?: number;
+}
+
 export interface ShopwarePropertyOption {
   id: string;
   groupId?: string;
@@ -120,6 +135,10 @@ export interface ShopwarePropertyOption {
   colorHexCode?: string;
   mediaId?: string;
   translations?: Record<string, { name: string }>;
+
+  // Plenty reference (internal use)
+  _plentyAttributeId?: number;
+  _plentyAttributeValueId?: number;
 }
 
 export interface ShopwareTag {

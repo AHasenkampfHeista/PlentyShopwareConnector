@@ -21,6 +21,8 @@
     "docker:down": "docker-compose -f docker/docker-compose.yml down",
 
     "manage-schedules": "tsx scripts/manage-sync-schedules.ts",
+    "manage-category-mappings": "tsx scripts/manage-category-mappings.ts",
+    "manage-attribute-mappings": "tsx scripts/manage-attribute-mappings.ts",
     "trigger-config-sync": "tsx scripts/trigger-config-sync.ts",
     "trigger-full-sync": "tsx scripts/trigger-full-sync.ts",
     "trigger-delta-sync": "tsx scripts/trigger-product-delta-sync.ts",

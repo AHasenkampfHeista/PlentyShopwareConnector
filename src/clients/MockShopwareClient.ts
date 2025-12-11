@@ -9,6 +9,9 @@ import {
   ShopwareBulkProduct,
   ShopwareBulkSyncResult,
   ShopwareBulkItemResult,
+  ShopwareCategory,
+  ShopwarePropertyGroup,
+  ShopwarePropertyOption,
 } from '../types/shopware';
 
 /**
@@ -586,6 +589,425 @@ export class MockShopwareClient implements IShopwareClient {
       _plentyItemId: p.plentyItemId || undefined,
       _plentyVariationId: p.plentyVariationId || undefined,
     }));
+  }
+
+  /**
+   * Create a new category
+   */
+  async createCategory(category: ShopwareCategory): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Creating category', { name: category.name });
+
+    const created = await this.prisma.mockShopwareCategory.create({
+      data: {
+        id: category.id || crypto.randomUUID(),
+        tenantId: this.tenantId,
+        parentId: category.parentId,
+        name: category.name || 'Unnamed Category',
+        active: category.active ?? true,
+        visible: category.visible ?? true,
+        level: category.level ?? 1,
+        plentyCategoryId: category._plentyCategoryId,
+        rawShopwareData: category as unknown as object,
+      },
+    });
+
+    return {
+      id: created.id,
+      success: true,
+    };
+  }
+
+  /**
+   * Update an existing category by ID
+   */
+  async updateCategory(id: string, category: Partial<ShopwareCategory>): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Updating category', { id });
+
+    const updated = await this.prisma.mockShopwareCategory.update({
+      where: {
+        id,
+      },
+      data: {
+        parentId: category.parentId,
+        name: category.name,
+        active: category.active,
+        visible: category.visible,
+        level: category.level,
+        rawShopwareData: category as unknown as object,
+      },
+    });
+
+    return {
+      id: updated.id,
+      success: true,
+    };
+  }
+
+  /**
+   * Get category by ID
+   */
+  async getCategoryById(id: string): Promise<ShopwareCategory | null> {
+    const category = await this.prisma.mockShopwareCategory.findUnique({
+      where: {
+        id,
+      },
+    });
+
+    if (!category) {
+      return null;
+    }
+
+    // Only return categories for this tenant
+    if (category.tenantId !== this.tenantId) {
+      return null;
+    }
+
+    return {
+      id: category.id,
+      parentId: category.parentId || undefined,
+      name: category.name,
+      active: category.active,
+      visible: category.visible,
+      level: category.level,
+      _plentyCategoryId: category.plentyCategoryId || undefined,
+    };
+  }
+
+  /**
+   * Check if category exists by ID
+   */
+  async categoryExists(id: string): Promise<boolean> {
+    const category = await this.prisma.mockShopwareCategory.findUnique({
+      where: {
+        id,
+      },
+    });
+
+    return category !== null && category.tenantId === this.tenantId;
+  }
+
+  /**
+   * Bulk sync categories (create or update in batch)
+   */
+  async bulkSyncCategories(categories: ShopwareCategory[]): Promise<ShopwareBulkSyncResult> {
+    this.log.info('Mock Shopware: Bulk syncing categories', { count: categories.length });
+
+    const results: ShopwareSyncResult[] = [];
+
+    for (const category of categories) {
+      try {
+        // Upsert pattern: if ID provided and exists, update; otherwise create
+        if (category.id && (await this.categoryExists(category.id))) {
+          const result = await this.updateCategory(category.id, category);
+          results.push(result);
+        } else {
+          const result = await this.createCategory(category);
+          results.push(result);
+        }
+      } catch (error) {
+        this.log.error('Mock Shopware: Failed to sync category', {
+          category: category.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        results.push({
+          id: category.id || '',
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const successCount = results.filter((r) => r.success).length;
+    const failedCount = results.filter((r) => !r.success).length;
+
+    return {
+      success: failedCount === 0,
+      results,
+      successCount,
+      failedCount,
+    };
+  }
+
+  /**
+   * Create a property group
+   */
+  async createPropertyGroup(group: ShopwarePropertyGroup): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Creating property group', { name: group.name });
+
+    const created = await this.prisma.mockShopwarePropertyGroup.create({
+      data: {
+        id: group.id || crypto.randomUUID(),
+        tenantId: this.tenantId,
+        name: group.name || 'Unnamed Property Group',
+        displayType: group.displayType || 'text',
+        sortingType: group.sortingType || 'alphanumeric',
+        position: group.position ?? 0,
+        plentyAttributeId: group._plentyAttributeId,
+        translations: group.translations as unknown as object || {},
+        rawShopwareData: group as unknown as object,
+      },
+    });
+
+    return {
+      id: created.id,
+      productNumber: '', // Not applicable for property groups
+      action: 'create',
+      success: true,
+    };
+  }
+
+  /**
+   * Update a property group by ID
+   */
+  async updatePropertyGroup(
+    id: string,
+    group: Partial<ShopwarePropertyGroup>
+  ): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Updating property group', { id });
+
+    const updated = await this.prisma.mockShopwarePropertyGroup.update({
+      where: { id },
+      data: {
+        name: group.name,
+        displayType: group.displayType,
+        sortingType: group.sortingType,
+        position: group.position,
+        translations: group.translations as unknown as object,
+        rawShopwareData: group as unknown as object,
+      },
+    });
+
+    return {
+      id: updated.id,
+      productNumber: '', // Not applicable for property groups
+      action: 'update',
+      success: true,
+    };
+  }
+
+  /**
+   * Get property group by ID
+   */
+  async getPropertyGroupById(id: string): Promise<ShopwarePropertyGroup | null> {
+    const group = await this.prisma.mockShopwarePropertyGroup.findUnique({
+      where: { id },
+    });
+
+    if (!group || group.tenantId !== this.tenantId) {
+      return null;
+    }
+
+    return {
+      id: group.id,
+      name: group.name,
+      displayType: group.displayType,
+      sortingType: group.sortingType,
+      position: group.position,
+      translations: group.translations as Record<string, { name: string; description?: string }>,
+      _plentyAttributeId: group.plentyAttributeId || undefined,
+    };
+  }
+
+  /**
+   * Check if property group exists
+   */
+  async propertyGroupExists(id: string): Promise<boolean> {
+    const group = await this.prisma.mockShopwarePropertyGroup.findUnique({
+      where: { id },
+    });
+
+    return group !== null && group.tenantId === this.tenantId;
+  }
+
+  /**
+   * Create a property option
+   */
+  async createPropertyOption(option: ShopwarePropertyOption): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Creating property option', {
+      name: option.name,
+      groupId: option.groupId,
+    });
+
+    const created = await this.prisma.mockShopwarePropertyOption.create({
+      data: {
+        id: option.id || crypto.randomUUID(),
+        tenantId: this.tenantId,
+        propertyGroupId: option.groupId || '',
+        name: option.name || 'Unnamed Property Option',
+        position: option.position ?? 0,
+        colorHexCode: option.colorHexCode,
+        mediaId: option.mediaId,
+        plentyAttributeId: option._plentyAttributeId,
+        plentyAttributeValueId: option._plentyAttributeValueId,
+        translations: option.translations as unknown as object || {},
+        rawShopwareData: option as unknown as object,
+      },
+    });
+
+    return {
+      id: created.id,
+      productNumber: '', // Not applicable for property options
+      action: 'create',
+      success: true,
+    };
+  }
+
+  /**
+   * Update a property option by ID
+   */
+  async updatePropertyOption(
+    id: string,
+    option: Partial<ShopwarePropertyOption>
+  ): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Updating property option', { id });
+
+    const updated = await this.prisma.mockShopwarePropertyOption.update({
+      where: { id },
+      data: {
+        propertyGroupId: option.groupId,
+        name: option.name,
+        position: option.position,
+        colorHexCode: option.colorHexCode,
+        mediaId: option.mediaId,
+        translations: option.translations as unknown as object,
+        rawShopwareData: option as unknown as object,
+      },
+    });
+
+    return {
+      id: updated.id,
+      productNumber: '', // Not applicable for property options
+      action: 'update',
+      success: true,
+    };
+  }
+
+  /**
+   * Get property option by ID
+   */
+  async getPropertyOptionById(id: string): Promise<ShopwarePropertyOption | null> {
+    const option = await this.prisma.mockShopwarePropertyOption.findUnique({
+      where: { id },
+    });
+
+    if (!option || option.tenantId !== this.tenantId) {
+      return null;
+    }
+
+    return {
+      id: option.id,
+      groupId: option.propertyGroupId,
+      name: option.name,
+      position: option.position,
+      colorHexCode: option.colorHexCode || undefined,
+      mediaId: option.mediaId || undefined,
+      translations: option.translations as Record<string, { name: string }>,
+      _plentyAttributeId: option.plentyAttributeId || undefined,
+      _plentyAttributeValueId: option.plentyAttributeValueId || undefined,
+    };
+  }
+
+  /**
+   * Check if property option exists
+   */
+  async propertyOptionExists(id: string): Promise<boolean> {
+    const option = await this.prisma.mockShopwarePropertyOption.findUnique({
+      where: { id },
+    });
+
+    return option !== null && option.tenantId === this.tenantId;
+  }
+
+  /**
+   * Bulk sync property groups
+   */
+  async bulkSyncPropertyGroups(
+    groups: ShopwarePropertyGroup[]
+  ): Promise<ShopwareBulkSyncResult> {
+    this.log.info('Mock Shopware: Bulk syncing property groups', { count: groups.length });
+
+    const results: ShopwareSyncResult[] = [];
+
+    for (const group of groups) {
+      try {
+        // Upsert pattern: if ID provided and exists, update; otherwise create
+        if (group.id && (await this.propertyGroupExists(group.id))) {
+          const result = await this.updatePropertyGroup(group.id, group);
+          results.push(result);
+        } else {
+          const result = await this.createPropertyGroup(group);
+          results.push(result);
+        }
+      } catch (error) {
+        this.log.error('Mock Shopware: Failed to sync property group', {
+          group: group.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        results.push({
+          id: group.id || '',
+          productNumber: '',
+          action: 'error',
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const successCount = results.filter((r) => r.success).length;
+    const failedCount = results.filter((r) => !r.success).length;
+
+    return {
+      success: failedCount === 0,
+      results,
+      successCount,
+      failedCount,
+    };
+  }
+
+  /**
+   * Bulk sync property options
+   */
+  async bulkSyncPropertyOptions(
+    options: ShopwarePropertyOption[]
+  ): Promise<ShopwareBulkSyncResult> {
+    this.log.info('Mock Shopware: Bulk syncing property options', { count: options.length });
+
+    const results: ShopwareSyncResult[] = [];
+
+    for (const option of options) {
+      try {
+        // Upsert pattern: if ID provided and exists, update; otherwise create
+        if (option.id && (await this.propertyOptionExists(option.id))) {
+          const result = await this.updatePropertyOption(option.id, option);
+          results.push(result);
+        } else {
+          const result = await this.createPropertyOption(option);
+          results.push(result);
+        }
+      } catch (error) {
+        this.log.error('Mock Shopware: Failed to sync property option', {
+          option: option.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        results.push({
+          id: option.id || '',
+          productNumber: '',
+          action: 'error',
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const successCount = results.filter((r) => r.success).length;
+    const failedCount = results.filter((r) => !r.success).length;
+
+    return {
+      success: failedCount === 0,
+      results,
+      successCount,
+      failedCount,
+    };
   }
 
   /**

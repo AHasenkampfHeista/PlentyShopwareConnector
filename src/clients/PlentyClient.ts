@@ -386,19 +386,54 @@ export class PlentyClient {
   // ============================================
 
   /**
-   * Get all attributes with values
+   * Get attributes (single page)
    */
-  async getAttributes(): Promise<PlentyAttribute[]> {
+  async getAttributes(params?: {
+    page?: number;
+    itemsPerPage?: number;
+    with?: string;
+  }): Promise<PlentyPaginatedResponse<PlentyAttribute>> {
     const response = await this.get<PlentyPaginatedResponse<PlentyAttribute>>(
       '/rest/items/attributes',
       {
-        with: 'names,values',
-        itemsPerPage: 250,
+        page: params?.page || 1,
+        itemsPerPage: params?.itemsPerPage || 250,
+        with: params?.with || 'names,values',
       }
     );
 
-    this.log.info('Fetched attributes', { count: response.entries.length });
-    return response.entries;
+    this.log.debug('Fetched attributes page', {
+      page: response.page,
+      count: response.entries.length,
+      isLastPage: response.isLastPage,
+    });
+    return response;
+  }
+
+  /**
+   * Get all attributes with pagination
+   */
+  async getAllAttributes(): Promise<PlentyAttribute[]> {
+    const allAttributes: PlentyAttribute[] = [];
+    let page = 1;
+    let isLastPage = false;
+
+    while (!isLastPage) {
+      const response = await this.getAttributes({
+        page,
+        with: 'names,values',
+      });
+      allAttributes.push(...response.entries);
+      isLastPage = response.isLastPage;
+      page++;
+
+      if (!isLastPage) {
+        await this.delay(100);
+      }
+    }
+
+    this.log.info('Fetched all attributes', { count: allAttributes.length });
+    return allAttributes;
   }
 
   // ============================================

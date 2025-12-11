@@ -1,5 +1,8 @@
 import {
   ShopwareProduct,
+  ShopwareCategory,
+  ShopwarePropertyGroup,
+  ShopwarePropertyOption,
   ShopwareStockUpdate,
   ShopwareSyncResult,
   ShopwareBulkProduct,
@@ -56,6 +59,81 @@ export interface IShopwareClient {
    * Batch update stock
    */
   batchUpdateStock(updates: ShopwareStockUpdate[]): Promise<ShopwareSyncResult[]>;
+
+  /**
+   * Create a new category
+   */
+  createCategory(category: ShopwareCategory): Promise<ShopwareSyncResult>;
+
+  /**
+   * Update an existing category by ID
+   */
+  updateCategory(id: string, category: Partial<ShopwareCategory>): Promise<ShopwareSyncResult>;
+
+  /**
+   * Get category by ID
+   */
+  getCategoryById(id: string): Promise<ShopwareCategory | null>;
+
+  /**
+   * Check if category exists by ID
+   */
+  categoryExists(id: string): Promise<boolean>;
+
+  /**
+   * Bulk sync categories (create or update in batch)
+   */
+  bulkSyncCategories(categories: ShopwareCategory[]): Promise<ShopwareBulkSyncResult>;
+
+  /**
+   * Create a property group
+   */
+  createPropertyGroup(group: ShopwarePropertyGroup): Promise<ShopwareSyncResult>;
+
+  /**
+   * Update a property group by ID
+   */
+  updatePropertyGroup(id: string, group: Partial<ShopwarePropertyGroup>): Promise<ShopwareSyncResult>;
+
+  /**
+   * Get property group by ID
+   */
+  getPropertyGroupById(id: string): Promise<ShopwarePropertyGroup | null>;
+
+  /**
+   * Check if property group exists
+   */
+  propertyGroupExists(id: string): Promise<boolean>;
+
+  /**
+   * Create a property option
+   */
+  createPropertyOption(option: ShopwarePropertyOption): Promise<ShopwareSyncResult>;
+
+  /**
+   * Update a property option by ID
+   */
+  updatePropertyOption(id: string, option: Partial<ShopwarePropertyOption>): Promise<ShopwareSyncResult>;
+
+  /**
+   * Get property option by ID
+   */
+  getPropertyOptionById(id: string): Promise<ShopwarePropertyOption | null>;
+
+  /**
+   * Check if property option exists
+   */
+  propertyOptionExists(id: string): Promise<boolean>;
+
+  /**
+   * Bulk sync property groups
+   */
+  bulkSyncPropertyGroups(groups: ShopwarePropertyGroup[]): Promise<ShopwareBulkSyncResult>;
+
+  /**
+   * Bulk sync property options
+   */
+  bulkSyncPropertyOptions(options: ShopwarePropertyOption[]): Promise<ShopwareBulkSyncResult>;
 
   /**
    * Test connection to Shopware API

@@ -107,9 +107,14 @@ export interface PlentyVariationStock {
 }
 
 export interface PlentyVariationAttributeValue {
-  variationId: number;
+  variationId?: number; // Legacy field
+  attributeValueSetId?: number; // API returns this
   attributeId: number;
-  attributeValueId: number;
+  valueId?: number; // API returns this field
+  attributeValueId?: number; // Legacy field name
+  isLinkableToImage?: boolean;
+  attribute?: unknown;
+  attributeValue?: unknown;
 }
 
 export interface PlentyVariationCategory {
@@ -287,7 +292,8 @@ export interface PlentyAttribute {
   tracdelightAttribute: string | null;
   typeOfSelectionInOnlineStore: string;
   attributeNames?: PlentyAttributeName[];
-  attributeValues?: PlentyAttributeValue[];
+  values?: PlentyAttributeValue[]; // API returns this field
+  attributeValues?: PlentyAttributeValue[]; // Legacy field name (not used by API)
 }
 
 export interface PlentyAttributeName {

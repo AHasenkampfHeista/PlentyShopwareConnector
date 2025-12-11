@@ -72,6 +72,36 @@ export class ProductTransformer {
       _plentyVariationId: variation.id,
     };
 
+    // Add categories if available
+    const categoryIds = variation.variationCategories?.map((vc) => vc.categoryId) || [];
+    if (categoryIds.length > 0) {
+      const { CategoryMappingService } = await import('../services/CategoryMappingService');
+      const categoryMappingService = new CategoryMappingService();
+      const categoryMappings = await categoryMappingService.getBatchMappings(tenantId, categoryIds);
+
+      product.categories = Object.values(categoryMappings).map((mapping) => ({
+        id: mapping.shopwareCategoryId,
+      }));
+    }
+
+    // Add properties (attributes) if available
+    const attributeValueIds = (variation.variationAttributeValues || [])
+      .map((vav) => vav.valueId || vav.attributeValueId)
+      .filter((id): id is number => id !== undefined && id !== null); // Filter out undefined/null values
+
+    if (attributeValueIds.length > 0) {
+      const { AttributeMappingService } = await import('../services/AttributeMappingService');
+      const attributeMappingService = new AttributeMappingService();
+      const attributeValueMappings = await attributeMappingService.getBatchAttributeValueMappings(
+        tenantId,
+        attributeValueIds
+      );
+
+      product.properties = Object.values(attributeValueMappings).map((mapping) => ({
+        id: mapping.shopwarePropertyOptionId,
+      }));
+    }
+
     // Apply custom field mappings if provided
     if (customMappings && customMappings.length > 0) {
       this.applyCustomMappings(product, variation, customMappings);

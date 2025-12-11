@@ -15,13 +15,11 @@ export const logger = pino({
           ignore: 'pid,hostname',
           singleLine: false,
           hideObject: false,
+          errorLikeObjectKeys: ['err', 'error'],
         },
       },
   base: {
     service: process.env.SERVICE_NAME || 'connector',
-  },
-  formatters: {
-    level: (label) => ({ level: label }),
   },
   timestamp: pino.stdTimeFunctions.isoTime,
 });

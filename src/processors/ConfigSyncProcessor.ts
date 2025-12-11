@@ -57,10 +57,10 @@ export class ConfigSyncProcessor {
 
       // Sync each config type
       log.info('Syncing categories');
-      result.categories = await this.syncCategories(jobData.tenantId, plenty);
+      //result.categories = await this.syncCategories(jobData.tenantId, plenty);
 
       log.info('Syncing attributes');
-      //result.attributes = await this.syncAttributes(jobData.tenantId, plenty);
+      result.attributes = await this.syncAttributes(jobData.tenantId, plenty);
 
       log.info('Syncing sales prices');
       //result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty);
@@ -201,7 +201,7 @@ export class ConfigSyncProcessor {
     let errors = 0;
 
     try {
-      const attributes = await plenty.getAttributes();
+      const attributes = await plenty.getAllAttributes();
 
       for (const attribute of attributes) {
         try {
@@ -248,7 +248,7 @@ export class ConfigSyncProcessor {
         fruugoAttribute: attribute.fruugoAttribute,
         pixmaniaAttribute: attribute.pixmaniaAttribute,
         googleShoppingAttribute: attribute.googleShoppingAttribute,
-        attributeValues: attribute.attributeValues as unknown as object,
+        attributeValues: (attribute.values || attribute.attributeValues) as unknown as object,
         names,
         rawData: attribute as unknown as object,
         syncedAt: new Date(),
@@ -262,7 +262,7 @@ export class ConfigSyncProcessor {
         fruugoAttribute: attribute.fruugoAttribute,
         pixmaniaAttribute: attribute.pixmaniaAttribute,
         googleShoppingAttribute: attribute.googleShoppingAttribute,
-        attributeValues: attribute.attributeValues as unknown as object,
+        attributeValues: (attribute.values || attribute.attributeValues) as unknown as object,
         names,
         rawData: attribute as unknown as object,
         syncedAt: new Date(),

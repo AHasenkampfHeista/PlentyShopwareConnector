@@ -99,6 +99,7 @@ export class ProductSyncProcessor {
           {
             with: DEFAULT_WITH_RELATIONS.join(','),
             itemsPerPage: options.batchSize || DEFAULT_BATCH_SIZE,
+            'itemId': 23423
           },
           (page, total) => {
             log.debug('Fetching page', { page, total });
@@ -152,6 +153,57 @@ export class ProductSyncProcessor {
         log.debug('Processing batch', { batch: batchIndex + 1, total: batches.length, items: batch.length });
 
         try {
+          // Ensure categories exist before transforming products
+          const { CategorySyncService } = await import('../services/CategorySyncService');
+          const categorySyncService = new CategorySyncService();
+
+          for (const variation of batch) {
+            try {
+              await categorySyncService.ensureCategoriesExist(
+                jobData.tenantId,
+                variation,
+                shopware
+              );
+            } catch (error) {
+              log.warn('Failed to ensure categories exist', {
+                variationId: variation.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              // Continue - products will be created without category assignment
+            }
+          }
+
+          // Ensure attributes and attribute values exist before transforming products
+          const { AttributeSyncService } = await import('../services/AttributeSyncService');
+          const attributeSyncService = new AttributeSyncService();
+
+          for (const variation of batch) {
+            try {
+              await attributeSyncService.ensureAttributesExist(
+                jobData.tenantId,
+                variation,
+                shopware
+              );
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              const errorStack = error instanceof Error ? error.stack : undefined;
+
+              console.error('❌ ATTRIBUTE SYNC FAILED:', {
+                variationId: variation.id,
+                variationNumber: variation.number,
+                attributeValueCount: variation.variationAttributeValues?.length || 0,
+                error: errorMessage,
+                stack: errorStack,
+              });
+
+              log.warn('Failed to ensure attributes exist', {
+                variationId: variation.id,
+                error: errorMessage,
+              });
+              // Continue - products will be created without property assignment
+            }
+          }
+
           // Transform all variations in batch
           const bulkProducts: ShopwareBulkProduct[] = [];
           for (const variation of batch) {
@@ -232,6 +284,16 @@ export class ProductSyncProcessor {
           }
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          const errorStack = error instanceof Error ? error.stack : undefined;
+
+          console.error('❌ BATCH PROCESSING FAILED:', {
+            batchIndex: batchIndex + 1,
+            totalBatches: batches.length,
+            batchSize: batch.length,
+            error: errorMessage,
+            stack: errorStack,
+          });
+
           log.error('Failed to process batch', {
             batch: batchIndex + 1,
             error: errorMessage,
