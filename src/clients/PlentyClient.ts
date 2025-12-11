@@ -366,6 +366,7 @@ export class PlentyClient {
       const response = await this.getCategories({
         page,
         with: 'details',
+        type: 'item'
       });
       allCategories.push(...response.entries);
       isLastPage = response.isLastPage;

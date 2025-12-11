@@ -60,16 +60,16 @@ export class ConfigSyncProcessor {
       result.categories = await this.syncCategories(jobData.tenantId, plenty);
 
       log.info('Syncing attributes');
-      result.attributes = await this.syncAttributes(jobData.tenantId, plenty);
+      //result.attributes = await this.syncAttributes(jobData.tenantId, plenty);
 
       log.info('Syncing sales prices');
-      result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty);
+      //result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty);
 
       log.info('Syncing manufacturers');
-      result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty);
+      //result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty);
 
       log.info('Syncing units');
-      result.units = await this.syncUnits(jobData.tenantId, plenty);
+      //result.units = await this.syncUnits(jobData.tenantId, plenty);
 
       // Update sync state
       await this.updateSyncState(jobData.tenantId);
@@ -106,8 +106,14 @@ export class ConfigSyncProcessor {
           const log = createJobLogger('', tenantId, 'CONFIG');
           log.error('Failed to upsert category', {
             categoryId: category.id,
-            error: error instanceof Error ? error.message : String(error),
+            categoryIdType: typeof category.id,
+            parentCategoryId: category.parentCategoryId,
+            level: category.level,
+            type: category.type,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            errorName: error instanceof Error ? error.name : 'Unknown',
             stack: error instanceof Error ? error.stack : undefined,
+            fullError: error,
           });
           errors++;
         }
@@ -131,9 +137,22 @@ export class ConfigSyncProcessor {
       }
     }
 
-    // Use boolean values from category
-    const linklist = category.linklist;
-    const sitemap = category.sitemap;
+    // Convert string Y/N to boolean
+    const linklist = category.linklist === 'Y' || category.linklist === true;
+    const sitemap = category.sitemap === 'Y' || category.sitemap === true;
+
+    const log = createJobLogger('', tenantId, 'CONFIG');
+    log.debug('Upserting category', {
+      categoryId: category.id,
+      categoryIdType: typeof category.id,
+      parentId: category.parentCategoryId,
+      level: category.level,
+      type: category.type,
+      linklist,
+      sitemap,
+      hasChildren: category.hasChildren,
+      namesCount: Object.keys(names).length,
+    });
 
     await this.prisma.plentyCategory.upsert({
       where: {

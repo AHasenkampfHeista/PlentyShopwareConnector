@@ -236,15 +236,15 @@ export interface PlentyCategory {
   parentCategoryId: number | null;
   level: number;
   type: string;
-  linklist: boolean;
+  linklist: boolean | 'Y' | 'N'; // API returns "Y"/"N" strings
   right: string;
-  sitemap: boolean;
+  sitemap: boolean | 'Y' | 'N'; // API returns "Y"/"N" strings
   hasChildren: boolean;
   details?: PlentyCategoryDetail[];
 }
 
 export interface PlentyCategoryDetail {
-  categoryId: number;
+  categoryId: string; // API returns string, e.g. "16"
   lang: string;
   name: string;
   description: string;
@@ -256,9 +256,19 @@ export interface PlentyCategoryDetail {
   nameUrl: string;
   canonicalLink: string;
   previewUrl: string;
-  position: number;
+  position: string; // API returns string, e.g. "0"
   updatedAt: string;
   updatedBy: string;
+  itemListView?: string;
+  singleItemView?: string;
+  pageView?: string;
+  fulltext?: 'Y' | 'N'; // API returns "Y"/"N" strings
+  metaRobots?: string;
+  image?: string | null;
+  imagePath?: string | null;
+  image2?: string | null;
+  image2Path?: string | null;
+  plentyId?: number;
 }
 
 export interface PlentyAttribute {
