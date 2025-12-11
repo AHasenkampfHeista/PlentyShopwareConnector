@@ -6,7 +6,8 @@
 
 import 'dotenv/config';
 import { PrismaClient, SyncType, SyncDirection, SyncStatus } from '@prisma/client';
-import { QueueService, SyncJobData } from '@connector/shared';
+import { QueueService } from '../src/queue/QueueService';
+import type { SyncJobData } from '../src/types/sync';
 
 async function main() {
   const tenantId = process.argv[2];

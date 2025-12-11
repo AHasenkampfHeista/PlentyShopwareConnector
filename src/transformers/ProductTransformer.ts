@@ -1,8 +1,9 @@
 import { PrismaClient } from '@prisma/client';
-import { getPrismaClient, createLogger } from '@connector/shared';
-import { PlentyVariation } from '@connector/shared';
-import { ShopwareProduct } from '@connector/shared';
-import { FieldMapping, TransformationRule } from '@connector/shared';
+import { getPrismaClient } from '../database/client';
+import { createLogger } from '../utils/logger';
+import type { PlentyVariation } from '../types/plenty';
+import type { ShopwareProduct } from '../types/shopware';
+import type { FieldMapping, TransformationRule } from '../types/sync';
 
 const DEFAULT_CURRENCY_ID = 'EUR';
 const DEFAULT_TAX_RATE = 19; // German VAT

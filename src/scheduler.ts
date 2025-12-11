@@ -1,7 +1,9 @@
 import 'dotenv/config';
 import { PrismaClient, SyncStatus, TenantStatus } from '@prisma/client';
 import { parseExpression } from 'cron-parser';
-import { logger, QueueService, SyncJobData } from '@connector/shared';
+import { logger } from './utils/logger';
+import { QueueService } from './queue/QueueService';
+import type { SyncJobData } from './types/sync';
 
 // Configuration
 const SCHEDULER_INTERVAL_MS = parseInt(process.env.SCHEDULER_INTERVAL_MS || '60000', 10);

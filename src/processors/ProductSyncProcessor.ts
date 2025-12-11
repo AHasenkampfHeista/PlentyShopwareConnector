@@ -1,17 +1,17 @@
 import { PrismaClient, SyncType } from '@prisma/client';
-import {
-  getPrismaClient,
-  createJobLogger,
-  PlentyClient,
-  PlentyClientConfig,
-  MockShopwareClient,
-  IShopwareClient,
-} from '@connector/shared';
-import { PlentyVariation } from '@connector/shared';
-import { DecryptedSyncJobData, SyncResult, FieldMapping, ShopwareBulkProduct } from '@connector/shared';
+import { getPrismaClient } from '../database/client';
+import { createJobLogger } from '../utils/logger';
+import { PlentyClient } from '../clients/PlentyClient';
+import type { PlentyClientConfig } from '../clients/PlentyClient';
+import { MockShopwareClient } from '../clients/MockShopwareClient';
+import type { IShopwareClient } from '../clients/interfaces';
+import type { PlentyVariation } from '../types/plenty';
+import type { DecryptedSyncJobData, SyncResult, FieldMapping } from '../types/sync';
+import type { ShopwareBulkProduct } from '../types/shopware';
 import { ProductTransformer } from '../transformers/ProductTransformer';
 import { ConfigSyncProcessor } from './ConfigSyncProcessor';
-import { ProductMappingService, ProductMappingRecord } from '@connector/shared';
+import { ProductMappingService } from '../services/ProductMappingService';
+import type { ProductMappingRecord } from '../services/ProductMappingService';
 
 const DEFAULT_BATCH_SIZE = 100;
 const BULK_SYNC_BATCH_SIZE = 100; // Batch size for bulk sync operations

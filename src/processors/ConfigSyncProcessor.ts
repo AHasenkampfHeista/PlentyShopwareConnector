@@ -1,13 +1,16 @@
 import { PrismaClient } from '@prisma/client';
-import { getPrismaClient, createJobLogger, PlentyClient, PlentyClientConfig } from '@connector/shared';
-import {
+import { getPrismaClient } from '../database/client';
+import { createJobLogger } from '../utils/logger';
+import { PlentyClient } from '../clients/PlentyClient';
+import type { PlentyClientConfig } from '../clients/PlentyClient';
+import type {
   PlentyCategory,
   PlentyAttribute,
   PlentySalesPrice,
   PlentyManufacturer,
   PlentyUnit,
-} from '@connector/shared';
-import { DecryptedSyncJobData, ConfigSyncResult } from '@connector/shared';
+} from '../types/plenty';
+import type { DecryptedSyncJobData, ConfigSyncResult } from '../types/sync';
 
 /**
  * Configuration Sync Processor

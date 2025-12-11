@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 import 'dotenv/config';
-import { getPrismaClient } from '@connector/shared';
+import { getPrismaClient } from '../src/database/client';
 
 const prisma = getPrismaClient();
 

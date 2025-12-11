@@ -2,31 +2,49 @@
   "name": "plenty-shopware-connector",
   "version": "1.0.0",
   "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
   "scripts": {
-    "dev:scheduler": "npm run dev --workspace=packages/scheduler",
-    "dev:worker": "npm run dev --workspace=packages/sync-worker",
-    "build": "npm run build --workspaces",
-    "test": "npm run test --workspaces",
-    "lint": "eslint packages/**/*.ts",
-    "migrate": "cd packages/shared && npx prisma migrate deploy",
+    "build": "tsc",
+    "dev:scheduler": "tsx watch src/scheduler.ts",
+    "dev:worker": "tsx watch src/worker.ts",
+    "start:scheduler": "node dist/scheduler.js",
+    "start:worker": "node dist/worker.js",
+    "lint": "eslint src/**/*.ts scripts/**/*.ts",
+
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:push": "prisma db push",
+    "prisma:seed": "tsx prisma/seed.ts",
+    "prisma:studio": "prisma studio",
+
     "docker:up": "docker-compose -f docker/docker-compose.yml up -d",
     "docker:down": "docker-compose -f docker/docker-compose.yml down",
+
     "manage-schedules": "tsx scripts/manage-sync-schedules.ts",
     "trigger-config-sync": "tsx scripts/trigger-config-sync.ts",
     "trigger-full-sync": "tsx scripts/trigger-full-sync.ts",
-    "trigger-delta-sync": "tsx scripts/trigger-product-delta-sync.ts"
+    "trigger-delta-sync": "tsx scripts/trigger-product-delta-sync.ts",
+    "reset-sync-data": "tsx scripts/reset-sync-data.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.7.0",
+    "axios": "^1.6.2",
+    "bullmq": "^5.0.0",
+    "cron-parser": "^4.9.0",
+    "dotenv": "^16.3.1",
+    "ioredis": "^5.3.2",
+    "pino": "^8.17.1",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
-    "typescript": "^5.3.3",
-    "eslint": "^8.55.0",
     "@typescript-eslint/eslint-plugin": "^6.15.0",
     "@typescript-eslint/parser": "^6.15.0",
+    "eslint": "^8.55.0",
+    "pino-pretty": "^10.3.0",
     "prettier": "^3.1.1",
+    "prisma": "^5.7.0",
     "tsx": "^4.7.0",
-    "cron-parser": "^4.9.0"
+    "typescript": "^5.3.3"
   }
 }

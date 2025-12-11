@@ -1,14 +1,10 @@
 import 'dotenv/config';
 import { PrismaClient, SyncStatus, SyncType } from '@prisma/client';
 import { Job } from 'bullmq';
-import {
-  logger,
-  QueueService,
-  decryptJSON,
-  SyncJobData,
-  DecryptedSyncJobData,
-  createJobLogger,
-} from '@connector/shared';
+import { logger, createJobLogger } from './utils/logger';
+import { QueueService } from './queue/QueueService';
+import { decryptJSON } from './utils/encryption';
+import type { SyncJobData, DecryptedSyncJobData } from './types/sync';
 import { ConfigSyncProcessor } from './processors/ConfigSyncProcessor';
 import { ProductSyncProcessor } from './processors/ProductSyncProcessor';
 import { StockSyncProcessor } from './processors/StockSyncProcessor';

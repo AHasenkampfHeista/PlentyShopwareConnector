@@ -1,6 +1,8 @@
 #!/usr/bin/env tsx
 import 'dotenv/config';
-import { getPrismaClient, PlentyClient, decryptJSON } from '@connector/shared';
+import { getPrismaClient } from '../src/database/client';
+import { PlentyClient } from '../src/clients/PlentyClient';
+import { decryptJSON } from '../src/utils/encryption';
 
 const prisma = getPrismaClient();
 

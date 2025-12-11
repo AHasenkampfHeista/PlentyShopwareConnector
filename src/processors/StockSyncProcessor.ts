@@ -1,15 +1,14 @@
 import { PrismaClient, SyncType } from '@prisma/client';
-import {
-  getPrismaClient,
-  createJobLogger,
-  PlentyClient,
-  PlentyClientConfig,
-  MockShopwareClient,
-  IShopwareClient,
-  ProductMappingService,
-} from '@connector/shared';
-import { PlentyStockManagementEntry } from '@connector/shared';
-import { DecryptedSyncJobData, SyncResult, SyncError, ShopwareStockUpdate } from '@connector/shared';
+import { getPrismaClient } from '../database/client';
+import { createJobLogger } from '../utils/logger';
+import { PlentyClient } from '../clients/PlentyClient';
+import type { PlentyClientConfig } from '../clients/PlentyClient';
+import { MockShopwareClient } from '../clients/MockShopwareClient';
+import type { IShopwareClient } from '../clients/interfaces';
+import { ProductMappingService } from '../services/ProductMappingService';
+import type { PlentyStockManagementEntry } from '../types/plenty';
+import type { DecryptedSyncJobData, SyncResult, SyncError } from '../types/sync';
+import type { ShopwareStockUpdate } from '../types/shopware';
 
 /**
  * Stock Sync Processor
