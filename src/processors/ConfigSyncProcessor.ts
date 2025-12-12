@@ -708,32 +708,204 @@ export class ConfigSyncProcessor {
   }
 
   /**
-   * Sync manufacturers from Plenty
+   * Sync manufacturers from Plenty using bulk operations
    */
   private async syncManufacturers(
     tenantId: string,
     plenty: PlentyClient,
     shopware: IShopwareClient
   ): Promise<{ synced: number; errors: number }> {
-    let synced = 0;
-    let errors = 0;
+    const log = createJobLogger('', tenantId, 'CONFIG');
 
     try {
       const manufacturers = await plenty.getManufacturers();
 
+      if (manufacturers.length === 0) {
+        log.info('No manufacturers to sync');
+        return { synced: 0, errors: 0 };
+      }
+
+      log.info('Starting bulk manufacturer sync', { count: manufacturers.length });
+
+      // Step 1: Bulk upsert to local cache
+      await this.bulkUpsertManufacturersToCache(tenantId, manufacturers);
+
+      // Step 2: Get all existing mappings at once
+      const { ManufacturerMappingService } = await import('../services/ManufacturerMappingService');
+      const mappingService = new ManufacturerMappingService();
+      const existingMappings = await mappingService.getBatchMappings(
+        tenantId,
+        manufacturers.map((m) => m.id)
+      );
+
+      // Step 3: Upload logos and collect mediaIds
+      const { MediaService } = await import('../services/MediaService');
+      const mediaService = new MediaService();
+      const logoMediaIds = new Map<number, string>();
+
       for (const manufacturer of manufacturers) {
-        try {
-          await this.upsertManufacturer(tenantId, manufacturer, shopware);
-          synced++;
-        } catch (error) {
-          errors++;
+        if (manufacturer.logo) {
+          const logoExtension = manufacturer.logo.split('.').pop()?.toLowerCase() || 'jpg';
+          const safeManufacturerName = manufacturer.name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+          const logoFileName = `manufacturer_${safeManufacturerName}_${manufacturer.id}.${logoExtension}`;
+
+          const uploadResult = await mediaService.uploadFromUrl(tenantId, shopware, {
+            sourceUrl: manufacturer.logo,
+            sourceType: 'MANUFACTURER_LOGO',
+            sourceEntityId: String(manufacturer.id),
+            folderName: 'Manufacturer Logos',
+            fileName: logoFileName,
+            title: `${manufacturer.name} Logo`,
+            alt: manufacturer.name,
+          });
+
+          if (uploadResult.success && uploadResult.shopwareMediaId) {
+            logoMediaIds.set(manufacturer.id, uploadResult.shopwareMediaId);
+          }
         }
       }
-    } catch (error) {
-      throw new Error(`Failed to fetch manufacturers: ${error}`);
-    }
 
-    return { synced, errors };
+      log.info('Logo uploads completed', { uploadedCount: logoMediaIds.size });
+
+      // Step 4: Prepare bulk payload for Shopware
+      const bulkPayload: Array<{
+        id: string;
+        name: string;
+        link: string | null;
+        description: string | null;
+        mediaId?: string;
+      }> = [];
+
+      const mappingUpdates: Array<{
+        plentyManufacturerId: number;
+        shopwareManufacturerId: string;
+        mappingType: 'MANUAL' | 'AUTO';
+        lastSyncAction: 'create' | 'update';
+      }> = [];
+
+      // Helper to generate UUID (same as ShopwareClient)
+      const generateUuid = (): string => {
+        return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          const v = c === 'x' ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        });
+      };
+
+      for (const manufacturer of manufacturers) {
+        const existingMapping = existingMappings[manufacturer.id];
+        const shopwareId = existingMapping?.shopwareManufacturerId || generateUuid();
+        const mediaId = logoMediaIds.get(manufacturer.id);
+
+        bulkPayload.push({
+          id: shopwareId,
+          name: manufacturer.name,
+          link: manufacturer.url || null,
+          description: manufacturer.comment || null,
+          ...(mediaId && { mediaId }),
+        });
+
+        mappingUpdates.push({
+          plentyManufacturerId: manufacturer.id,
+          shopwareManufacturerId: shopwareId,
+          mappingType: existingMapping?.mappingType as 'MANUAL' | 'AUTO' || 'AUTO',
+          lastSyncAction: existingMapping ? 'update' : 'create',
+        });
+      }
+
+      // Step 5: Bulk sync to Shopware
+      log.info('Executing bulk sync to Shopware', { count: bulkPayload.length });
+      const bulkResult = await shopware.bulkSyncManufacturers(bulkPayload);
+
+      // Step 6: Update mappings based on results
+      if (bulkResult.success) {
+        await mappingService.upsertMappings(tenantId, mappingUpdates);
+        log.info('Bulk manufacturer sync completed successfully', { synced: manufacturers.length });
+        return { synced: manufacturers.length, errors: 0 };
+      } else {
+        // Count successes and failures from individual results
+        const successCount = bulkResult.results.filter((r) => r.success).length;
+        const errorCount = bulkResult.results.filter((r) => !r.success).length;
+
+        // Only update mappings for successful items
+        const successfulMappings = mappingUpdates.filter((_, index) => bulkResult.results[index]?.success);
+        if (successfulMappings.length > 0) {
+          await mappingService.upsertMappings(tenantId, successfulMappings);
+        }
+
+        log.warn('Bulk manufacturer sync completed with errors', { synced: successCount, errors: errorCount });
+        return { synced: successCount, errors: errorCount };
+      }
+    } catch (error) {
+      log.error('Failed to sync manufacturers', { error: error instanceof Error ? error.message : String(error) });
+      throw new Error(`Failed to sync manufacturers: ${error}`);
+    }
+  }
+
+  /**
+   * Bulk upsert manufacturers to local cache
+   */
+  private async bulkUpsertManufacturersToCache(
+    tenantId: string,
+    manufacturers: PlentyManufacturer[]
+  ): Promise<void> {
+    // Use transaction for bulk upsert
+    await this.prisma.$transaction(
+      manufacturers.map((manufacturer) =>
+        this.prisma.plentyManufacturer.upsert({
+          where: {
+            tenantId_id: {
+              tenantId,
+              id: manufacturer.id,
+            },
+          },
+          create: {
+            id: manufacturer.id,
+            tenantId,
+            name: manufacturer.name,
+            externalName: manufacturer.externalName,
+            logo: manufacturer.logo,
+            url: manufacturer.url,
+            street: manufacturer.street,
+            houseNo: manufacturer.houseNo,
+            postcode: manufacturer.postcode,
+            town: manufacturer.town,
+            phoneNumber: manufacturer.phoneNumber,
+            faxNumber: manufacturer.faxNumber,
+            email: manufacturer.email,
+            countryId: manufacturer.countryId,
+            pixmaniaBrandId: manufacturer.pixmaniaBrandId,
+            neckermannBrandId: manufacturer.neckermannBrandId,
+            position: manufacturer.position,
+            comment: manufacturer.comment,
+            laRedouteBrandId: manufacturer.laRedouteBrandId,
+            rawData: manufacturer as unknown as object,
+            syncedAt: new Date(),
+          },
+          update: {
+            name: manufacturer.name,
+            externalName: manufacturer.externalName,
+            logo: manufacturer.logo,
+            url: manufacturer.url,
+            street: manufacturer.street,
+            houseNo: manufacturer.houseNo,
+            postcode: manufacturer.postcode,
+            town: manufacturer.town,
+            phoneNumber: manufacturer.phoneNumber,
+            faxNumber: manufacturer.faxNumber,
+            email: manufacturer.email,
+            countryId: manufacturer.countryId,
+            pixmaniaBrandId: manufacturer.pixmaniaBrandId,
+            neckermannBrandId: manufacturer.neckermannBrandId,
+            position: manufacturer.position,
+            comment: manufacturer.comment,
+            laRedouteBrandId: manufacturer.laRedouteBrandId,
+            rawData: manufacturer as unknown as object,
+            syncedAt: new Date(),
+          },
+        })
+      )
+    );
   }
 
   /**
