@@ -68,8 +68,8 @@ export class ProductSyncProcessor {
     };
 
     try {
-      // Check if config is stale and needs refresh
-      await this.checkAndRefreshConfig(jobData, log);
+      // Ensure config exists (scheduler handles refresh timing)
+      await this.ensureConfigExists(jobData.tenantId, log);
 
       // Initialize clients
       const plentyConfig: PlentyClientConfig = {
@@ -342,28 +342,33 @@ export class ProductSyncProcessor {
   }
 
   /**
-   * Check if config is stale and refresh if needed
+   * Ensure config exists (fail fast if not)
+   * Note: Config refresh timing is handled by the scheduler, not the worker
    */
-  private async checkAndRefreshConfig(
-    jobData: DecryptedSyncJobData,
+  private async ensureConfigExists(
+    tenantId: string,
     log: ReturnType<typeof createJobLogger>
   ): Promise<void> {
-    const configAge = await this.configProcessor.getConfigAge(jobData.tenantId);
-    const thresholdHours = 6; // Default threshold
+    // Check if config has ever been synced
+    const syncState = await this.prisma.syncState.findUnique({
+      where: {
+        tenantId_syncType: {
+          tenantId,
+          syncType: 'CONFIG',
+        },
+      },
+    });
 
-    if (configAge === null || configAge > thresholdHours) {
-      log.info('Config is stale, refreshing', { ageHours: configAge });
-
-      // Create a config sync job data
-      const configJobData: DecryptedSyncJobData = {
-        ...jobData,
-        id: `config-refresh-${Date.now()}`,
-        syncType: SyncType.CONFIG,
-      };
-
-      await this.configProcessor.process(configJobData);
-      log.info('Config refreshed');
+    if (!syncState || !syncState.lastSuccessfulSyncAt) {
+      const errorMsg = 'Config not found. Please run CONFIG sync first before syncing products.';
+      log.error(errorMsg);
+      throw new Error(errorMsg);
     }
+
+    log.debug('Config exists', {
+      lastSyncedAt: syncState.lastSuccessfulSyncAt,
+      ageHours: Math.round((Date.now() - syncState.lastSuccessfulSyncAt.getTime()) / (1000 * 60 * 60)),
+    });
   }
 
   /**

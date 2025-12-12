@@ -38,10 +38,12 @@ model Tenant {
   mockShopwareCategories    MockShopwareCategory[]
   mockShopwarePropertyGroups MockShopwarePropertyGroup[]
   mockShopwarePropertyOptions MockShopwarePropertyOption[]
+  mockShopwarePrices        MockShopwarePrice[]
   productMappings           ProductMapping[]
   categoryMappings          CategoryMapping[]
   attributeMappings         AttributeMapping[]
   attributeValueMappings    AttributeValueMapping[]
+  salesPriceMappings        SalesPriceMapping[]
 
   @@index([status])
   @@map("tenants")
@@ -534,6 +536,36 @@ model AttributeValueMapping {
 }
 
 // ============================================
+// SALES PRICE MAPPING (Plenty ↔ Shopware)
+// ============================================
+
+model SalesPriceMapping {
+  id                    String      @id @default(uuid())
+  tenantId              String      @map("tenant_id")
+  tenant                Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // PlentyMarkets identifiers
+  plentySalesPriceId    Int         @map("plenty_sales_price_id")
+
+  // Shopware identifiers
+  shopwarePriceId       String      @map("shopware_price_id")
+
+  // Mapping metadata
+  mappingType           MappingType @map("mapping_type")
+  lastSyncedAt          DateTime    @map("last_synced_at")
+  lastSyncAction        String      @map("last_sync_action") // 'create', 'update'
+
+  // Timestamps
+  createdAt             DateTime    @default(now()) @map("created_at")
+  updatedAt             DateTime    @updatedAt @map("updated_at")
+
+  @@unique([tenantId, plentySalesPriceId])
+  @@unique([tenantId, shopwarePriceId])
+  @@index([tenantId, mappingType])
+  @@map("sales_price_mappings")
+}
+
+// ============================================
 // MOCK SHOPWARE PROPERTY GROUPS & OPTIONS
 // ============================================
 
@@ -598,4 +630,45 @@ model MockShopwarePropertyOption {
   @@index([tenantId, propertyGroupId])
   @@index([tenantId, plentyAttributeId])
   @@map("mock_shopware_property_options")
+}
+
+// ============================================
+// MOCK SHOPWARE PRICES
+// ============================================
+
+model MockShopwarePrice {
+  id                  String   @id @default(uuid())
+  tenantId            String   @map("tenant_id")
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Core price data
+  name                String
+  type                String   @default("default") // 'default', 'rrp', 'listPrice', etc.
+  isGross             Boolean  @default(true) @map("is_gross")
+
+  // Pricing (optional, for reference)
+  quantityStart       Int?     @default(1) @map("quantity_start")
+  quantityEnd         Int?     @map("quantity_end")
+
+  // Relations
+  ruleId              String?  @map("rule_id") // Shopware rule ID if applicable
+  currencyId          String?  @map("currency_id")
+
+  // Plenty reference
+  plentySalesPriceId  Int?     @map("plenty_sales_price_id")
+
+  // Translations stored as JSON: { "de": "Standardpreis", "en": "Default Price" }
+  translations        Json?
+
+  // Raw data
+  rawShopwareData     Json?    @map("raw_shopware_data")
+
+  // Timestamps
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, plentySalesPriceId])
+  @@index([tenantId])
+  @@index([tenantId, type])
+  @@map("mock_shopware_prices")
 }

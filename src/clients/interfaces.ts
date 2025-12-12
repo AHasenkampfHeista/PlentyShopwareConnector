@@ -136,6 +136,40 @@ export interface IShopwareClient {
   bulkSyncPropertyOptions(options: ShopwarePropertyOption[]): Promise<ShopwareBulkSyncResult>;
 
   /**
+   * Create a new price
+   */
+  createPrice(price: {
+    name: string;
+    type?: string;
+    isGross?: boolean;
+    plentySalesPriceId?: number;
+    translations?: Record<string, string>;
+  }): Promise<ShopwareSyncResult>;
+
+  /**
+   * Update an existing price by ID
+   */
+  updatePrice(
+    id: string,
+    price: {
+      name?: string;
+      type?: string;
+      isGross?: boolean;
+      translations?: Record<string, string>;
+    }
+  ): Promise<ShopwareSyncResult>;
+
+  /**
+   * Get price by ID
+   */
+  getPriceById(id: string): Promise<{ id: string; name: string; type: string } | null>;
+
+  /**
+   * Check if price exists by ID
+   */
+  priceExists(id: string): Promise<boolean>;
+
+  /**
    * Test connection to Shopware API
    */
   testConnection(): Promise<boolean>;

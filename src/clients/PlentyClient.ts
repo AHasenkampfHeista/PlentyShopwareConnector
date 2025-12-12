@@ -441,19 +441,54 @@ export class PlentyClient {
   // ============================================
 
   /**
-   * Get all sales prices with names and relations
+   * Get sales prices (single page)
    */
-  async getSalesPrices(): Promise<PlentySalesPrice[]> {
+  async getSalesPrices(params?: {
+    page?: number;
+    itemsPerPage?: number;
+    with?: string;
+  }): Promise<PlentyPaginatedResponse<PlentySalesPrice>> {
     const response = await this.get<PlentyPaginatedResponse<PlentySalesPrice>>(
       '/rest/items/sales_prices',
       {
-        with: 'names,accounts,countries,currencies,customerClasses,referrers,clients',
-        itemsPerPage: 250,
+        page: params?.page || 1,
+        itemsPerPage: params?.itemsPerPage || 250,
+        with: params?.with || 'names,accounts,countries,currencies,customerClasses,referrers,clients',
       }
     );
 
-    this.log.info('Fetched sales prices', { count: response.entries.length });
-    return response.entries;
+    this.log.debug('Fetched sales prices page', {
+      page: response.page,
+      count: response.entries.length,
+      isLastPage: response.isLastPage,
+    });
+    return response;
+  }
+
+  /**
+   * Get all sales prices with pagination
+   */
+  async getAllSalesPrices(): Promise<PlentySalesPrice[]> {
+    const allSalesPrices: PlentySalesPrice[] = [];
+    let page = 1;
+    let isLastPage = false;
+
+    while (!isLastPage) {
+      const response = await this.getSalesPrices({
+        page,
+        with: 'names,accounts,countries,currencies,customerClasses,referrers,clients',
+      });
+      allSalesPrices.push(...response.entries);
+      isLastPage = response.isLastPage;
+      page++;
+
+      if (!isLastPage) {
+        await this.delay(100);
+      }
+    }
+
+    this.log.info('Fetched all sales prices', { count: allSalesPrices.length });
+    return allSalesPrices;
   }
 
   // ============================================

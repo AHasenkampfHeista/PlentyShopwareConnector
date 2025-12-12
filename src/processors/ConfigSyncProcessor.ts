@@ -3,6 +3,8 @@ import { getPrismaClient } from '../database/client';
 import { createJobLogger } from '../utils/logger';
 import { PlentyClient } from '../clients/PlentyClient';
 import type { PlentyClientConfig } from '../clients/PlentyClient';
+import { MockShopwareClient } from '../clients/MockShopwareClient';
+import type { IShopwareClient } from '../clients/interfaces';
 import type {
   PlentyCategory,
   PlentyAttribute,
@@ -55,15 +57,21 @@ export class ConfigSyncProcessor {
       const plenty = new PlentyClient(plentyConfig);
       await plenty.authenticate();
 
+      // Initialize Shopware client
+      const shopware: IShopwareClient = new MockShopwareClient({
+        tenantId: jobData.tenantId,
+      });
+      await shopware.authenticate();
+
       // Sync each config type
       log.info('Syncing categories');
       //result.categories = await this.syncCategories(jobData.tenantId, plenty);
 
       log.info('Syncing attributes');
-      result.attributes = await this.syncAttributes(jobData.tenantId, plenty);
+      //result.attributes = await this.syncAttributes(jobData.tenantId, plenty);
 
       log.info('Syncing sales prices');
-      //result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty);
+      result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing manufacturers');
       //result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty);
@@ -275,17 +283,18 @@ export class ConfigSyncProcessor {
    */
   private async syncSalesPrices(
     tenantId: string,
-    plenty: PlentyClient
+    plenty: PlentyClient,
+    shopware: IShopwareClient
   ): Promise<{ synced: number; errors: number }> {
     let synced = 0;
     let errors = 0;
 
     try {
-      const salesPrices = await plenty.getSalesPrices();
+      const salesPrices = await plenty.getAllSalesPrices();
 
       for (const salesPrice of salesPrices) {
         try {
-          await this.upsertSalesPrice(tenantId, salesPrice);
+          await this.upsertSalesPrice(tenantId, salesPrice, shopware);
           synced++;
         } catch (error) {
           errors++;
@@ -301,7 +310,11 @@ export class ConfigSyncProcessor {
   /**
    * Upsert a single sales price
    */
-  private async upsertSalesPrice(tenantId: string, salesPrice: PlentySalesPrice): Promise<void> {
+  private async upsertSalesPrice(
+    tenantId: string,
+    salesPrice: PlentySalesPrice,
+    shopware: IShopwareClient
+  ): Promise<void> {
     // Extract localized names
     const names: Record<string, string> = {};
     if (salesPrice.names) {
@@ -325,6 +338,7 @@ export class ConfigSyncProcessor {
     // Extract referrer IDs
     const referrerIds = salesPrice.referrers?.map((r) => r.referrerId) || [];
 
+    // Save to local cache
     await this.prisma.plentySalesPrice.upsert({
       where: {
         tenantId_id: {
@@ -365,6 +379,55 @@ export class ConfigSyncProcessor {
         syncedAt: new Date(),
       },
     });
+
+    // Check if mapping exists
+    const { SalesPriceMappingService } = await import('../services/SalesPriceMappingService');
+    const mappingService = new SalesPriceMappingService();
+
+    const existingMapping = await mappingService.getMapping(tenantId, salesPrice.id);
+
+    if (!existingMapping) {
+      // No mapping exists - create price in Shopware
+      const priceName = names['en'] || names['de'] || `Price ${salesPrice.id}`;
+      const result = await shopware.createPrice({
+        name: priceName,
+        type: salesPrice.type,
+        isGross: true,
+        plentySalesPriceId: salesPrice.id,
+        translations: names,
+      });
+
+      if (result.success && result.id) {
+        // Store the mapping
+        await mappingService.upsertMappings(tenantId, [
+          {
+            plentySalesPriceId: salesPrice.id,
+            shopwarePriceId: result.id,
+            mappingType: 'AUTO',
+            lastSyncAction: 'create',
+          },
+        ]);
+      }
+    } else {
+      // Mapping exists - optionally update the price in Shopware
+      const priceName = names['en'] || names['de'] || `Price ${salesPrice.id}`;
+      await shopware.updatePrice(existingMapping.shopwarePriceId, {
+        name: priceName,
+        type: salesPrice.type,
+        isGross: true,
+        translations: names,
+      });
+
+      // Update mapping sync time
+      await mappingService.upsertMappings(tenantId, [
+        {
+          plentySalesPriceId: salesPrice.id,
+          shopwarePriceId: existingMapping.shopwarePriceId,
+          mappingType: existingMapping.mappingType as 'MANUAL' | 'AUTO',
+          lastSyncAction: 'update',
+        },
+      ]);
+    }
   }
 
   /**

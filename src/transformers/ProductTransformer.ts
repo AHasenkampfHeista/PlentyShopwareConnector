@@ -12,6 +12,7 @@ interface LocalConfig {
   categories: Map<number, { id: number; names: Record<string, string> | null }>;
   attributes: Map<number, { id: number; names: Record<string, string> | null; backendName: string }>;
   salesPrices: Map<number, { id: number; type: string; currency: string | null }>;
+  salesPriceMappings: Map<number, { shopwarePriceId: string; mappingType: string }>;
 }
 
 /**
@@ -42,12 +43,8 @@ export class ProductTransformer {
     // Get text in preferred language (de first, then en, then first available)
     const text = this.getVariationText(variation, ['de', 'en']);
 
-    // Find main price
-    const mainPrice = this.findMainPrice(variation, config);
-
-    // Calculate net price from gross (assuming standard tax rate)
-    const grossPrice = mainPrice?.price ?? 0;
-    const netPrice = grossPrice / (1 + DEFAULT_TAX_RATE / 100);
+    // Transform prices using sales price mappings
+    const prices = this.transformPrices(variation, config);
 
     // Get stock from first warehouse
     const stock = this.calculateStock(variation);
@@ -59,14 +56,7 @@ export class ProductTransformer {
       description: text.description || undefined,
       stock: stock,
       active: variation.isActive ?? true,
-      price: [
-        {
-          currencyId: DEFAULT_CURRENCY_ID,
-          gross: grossPrice,
-          net: netPrice,
-          linked: true,
-        },
-      ],
+      price: prices,
       // Internal references
       _plentyItemId: variation.itemId,
       _plentyVariationId: variation.id,
@@ -149,7 +139,7 @@ export class ProductTransformer {
     }
 
     // Load from database
-    const [categories, attributes, salesPrices] = await Promise.all([
+    const [categories, attributes, salesPrices, salesPriceMappings] = await Promise.all([
       this.prisma.plentyCategory.findMany({
         where: { tenantId },
         select: { id: true, names: true },
@@ -161,6 +151,10 @@ export class ProductTransformer {
       this.prisma.plentySalesPrice.findMany({
         where: { tenantId },
         select: { id: true, type: true, currency: true },
+      }),
+      this.prisma.salesPriceMapping.findMany({
+        where: { tenantId },
+        select: { plentySalesPriceId: true, shopwarePriceId: true, mappingType: true },
       }),
     ]);
 
@@ -176,6 +170,12 @@ export class ProductTransformer {
       ),
       salesPrices: new Map(
         salesPrices.map((p) => [p.id, { id: p.id, type: p.type, currency: p.currency }])
+      ),
+      salesPriceMappings: new Map(
+        salesPriceMappings.map((m) => [
+          m.plentySalesPriceId,
+          { shopwarePriceId: m.shopwarePriceId, mappingType: m.mappingType },
+        ])
       ),
     };
 
@@ -233,7 +233,101 @@ export class ProductTransformer {
   }
 
   /**
-   * Find the main/default price from variation sales prices
+   * Transform variation sales prices to Shopware price format
+   * Supports main price and list price (RRP) using sales price mappings
+   */
+  private transformPrices(
+    variation: PlentyVariation,
+    config: LocalConfig
+  ): { currencyId: string; gross: number; net: number; linked: boolean; listPrice?: { gross: number; net: number; linked: boolean } | null }[] {
+    const prices = variation.variationSalesPrices || [];
+
+    if (prices.length === 0) {
+      // Return default price structure with zero price
+      return [{
+        currencyId: DEFAULT_CURRENCY_ID,
+        gross: 0,
+        net: 0,
+        linked: true,
+        listPrice: null,
+      }];
+    }
+
+    // Find main price (default type) and RRP price
+    let mainPriceValue: number | null = null;
+    let rrpPriceValue: number | null = null;
+    let mainSalesPriceId: number | null = null;
+
+    // Look for prices by type
+    for (const price of prices) {
+      const salesPrice = config.salesPrices.get(price.salesPriceId);
+
+      if (!salesPrice) continue;
+
+      // Find default price for main price
+      if (salesPrice.type === 'default' && mainPriceValue === null) {
+        mainPriceValue = price.price;
+        mainSalesPriceId = price.salesPriceId;
+      }
+
+      // Find RRP price for list price
+      if (salesPrice.type === 'rrp' && rrpPriceValue === null) {
+        rrpPriceValue = price.price;
+      }
+    }
+
+    // If still no main price, use first available
+    if (mainPriceValue === null && prices.length > 0) {
+      mainPriceValue = prices[0].price;
+      mainSalesPriceId = prices[0].salesPriceId;
+    }
+
+    // Look for RRP if not found through mapping
+    if (rrpPriceValue === null) {
+      for (const price of prices) {
+        const salesPrice = config.salesPrices.get(price.salesPriceId);
+        if (salesPrice?.type === 'rrp' && price.salesPriceId !== mainSalesPriceId) {
+          rrpPriceValue = price.price;
+          break;
+        }
+      }
+    }
+
+    // Calculate gross and net prices
+    const grossPrice = mainPriceValue ?? 0;
+    const netPrice = grossPrice / (1 + DEFAULT_TAX_RATE / 100);
+
+    // Build the main price object
+    const shopwarePrice: {
+      currencyId: string;
+      gross: number;
+      net: number;
+      linked: boolean;
+      listPrice?: { gross: number; net: number; linked: boolean } | null;
+    } = {
+      currencyId: DEFAULT_CURRENCY_ID,
+      gross: grossPrice,
+      net: netPrice,
+      linked: true,
+      listPrice: null,
+    };
+
+    // Add list price (RRP) if available
+    if (rrpPriceValue !== null && rrpPriceValue > grossPrice) {
+      const rrpNet = rrpPriceValue / (1 + DEFAULT_TAX_RATE / 100);
+      shopwarePrice.listPrice = {
+        gross: rrpPriceValue,
+        net: rrpNet,
+        linked: true,
+      };
+    }
+
+    return [shopwarePrice];
+  }
+
+  /**
+   * Find the main/default price from variation sales prices (legacy method)
+   * @deprecated Use transformPrices instead
    */
   private findMainPrice(
     variation: PlentyVariation,

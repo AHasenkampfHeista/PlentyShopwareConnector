@@ -729,6 +729,110 @@ export class MockShopwareClient implements IShopwareClient {
   }
 
   /**
+   * Create a new price
+   */
+  async createPrice(price: {
+    name: string;
+    type?: string;
+    isGross?: boolean;
+    plentySalesPriceId?: number;
+    translations?: Record<string, string>;
+  }): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Creating price', { name: price.name, type: price.type });
+
+    const created = await this.prisma.mockShopwarePrice.create({
+      data: {
+        id: crypto.randomUUID(),
+        tenantId: this.tenantId,
+        name: price.name,
+        type: price.type || 'default',
+        isGross: price.isGross ?? true,
+        plentySalesPriceId: price.plentySalesPriceId,
+        translations: price.translations as unknown as object,
+        rawShopwareData: price as unknown as object,
+      },
+    });
+
+    return {
+      id: created.id,
+      success: true,
+    };
+  }
+
+  /**
+   * Update an existing price by ID
+   */
+  async updatePrice(
+    id: string,
+    price: {
+      name?: string;
+      type?: string;
+      isGross?: boolean;
+      translations?: Record<string, string>;
+    }
+  ): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Updating price', { id });
+
+    const updated = await this.prisma.mockShopwarePrice.update({
+      where: {
+        id,
+      },
+      data: {
+        name: price.name,
+        type: price.type,
+        isGross: price.isGross,
+        translations: price.translations as unknown as object,
+        rawShopwareData: price as unknown as object,
+      },
+    });
+
+    return {
+      id: updated.id,
+      success: true,
+    };
+  }
+
+  /**
+   * Get price by ID
+   */
+  async getPriceById(id: string): Promise<{ id: string; name: string; type: string } | null> {
+    const price = await this.prisma.mockShopwarePrice.findUnique({
+      where: {
+        id,
+      },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        tenantId: true,
+      },
+    });
+
+    if (!price || price.tenantId !== this.tenantId) {
+      return null;
+    }
+
+    return {
+      id: price.id,
+      name: price.name,
+      type: price.type,
+    };
+  }
+
+  /**
+   * Check if price exists by ID
+   */
+  async priceExists(id: string): Promise<boolean> {
+    const price = await this.prisma.mockShopwarePrice.findUnique({
+      where: {
+        id,
+      },
+    });
+
+    return price !== null && price.tenantId === this.tenantId;
+  }
+
+  /**
    * Create a property group
    */
   async createPropertyGroup(group: ShopwarePropertyGroup): Promise<ShopwareSyncResult> {
