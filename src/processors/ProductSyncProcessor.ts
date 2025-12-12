@@ -3,7 +3,7 @@ import { getPrismaClient } from '../database/client';
 import { createJobLogger } from '../utils/logger';
 import { PlentyClient } from '../clients/PlentyClient';
 import type { PlentyClientConfig } from '../clients/PlentyClient';
-import { MockShopwareClient } from '../clients/MockShopwareClient';
+import { createShopwareClient } from '../clients/ShopwareClientFactory';
 import type { IShopwareClient } from '../clients/interfaces';
 import type { PlentyVariation } from '../types/plenty';
 import type { DecryptedSyncJobData, SyncResult, FieldMapping } from '../types/sync';
@@ -79,7 +79,7 @@ export class ProductSyncProcessor {
       const plenty = new PlentyClient(plentyConfig);
       await plenty.authenticate();
 
-      const shopware: IShopwareClient = new MockShopwareClient({
+      const shopware: IShopwareClient = createShopwareClient({
         tenantId: jobData.tenantId,
       });
       await shopware.authenticate();

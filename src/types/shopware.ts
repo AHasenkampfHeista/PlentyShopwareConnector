@@ -190,10 +190,10 @@ export interface ShopwareTax {
 export interface ShopwareManufacturer {
   id: string;
   versionId?: string;
-  mediaId?: string;
-  link?: string;
+  mediaId?: string | null;
+  link?: string | null;
   name?: string;
-  description?: string;
+  description?: string | null;
   translations?: Record<string, { name: string; description?: string }>;
 
   // Plenty reference (internal use)

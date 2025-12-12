@@ -543,6 +543,156 @@ export class MockShopwareClient implements IShopwareClient {
     return results;
   }
 
+  // ============================================
+  // MEDIA METHODS
+  // ============================================
+
+  /**
+   * Create a media entity
+   */
+  async createMedia(params: {
+    fileName: string;
+    folderId?: string;
+    title?: string;
+    alt?: string;
+  }): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Creating media entity', { fileName: params.fileName });
+
+    const created = await this.prisma.mockShopwareMedia.create({
+      data: {
+        tenantId: this.tenantId,
+        fileName: params.fileName.replace(/\.[^/.]+$/, ''),
+        fileExtension: params.fileName.split('.').pop() || 'jpg',
+        mimeType: 'image/jpeg',
+        title: params.title,
+        alt: params.alt,
+        folderId: params.folderId,
+      },
+    });
+
+    return {
+      id: created.id,
+      productNumber: '',
+      action: 'create',
+      success: true,
+    };
+  }
+
+  /**
+   * Upload media file from URL to an existing media entity
+   */
+  async uploadMediaFromUrl(mediaId: string, sourceUrl: string, fileName: string): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Uploading media from URL', { mediaId, sourceUrl, fileName });
+
+    // In mock mode, we just update the record with the source URL
+    await this.prisma.mockShopwareMedia.update({
+      where: { id: mediaId },
+      data: {
+        sourceUrl,
+        fileName: fileName.replace(/\.[^/.]+$/, ''),
+        fileExtension: fileName.split('.').pop() || 'jpg',
+      },
+    });
+
+    return {
+      id: mediaId,
+      productNumber: '',
+      action: 'update',
+      success: true,
+    };
+  }
+
+  /**
+   * Create media and upload from URL in one operation
+   */
+  async createMediaFromUrl(params: {
+    sourceUrl: string;
+    fileName: string;
+    folderId?: string;
+    title?: string;
+    alt?: string;
+  }): Promise<ShopwareSyncResult & { mimeType?: string; fileSize?: number }> {
+    this.log.info('Mock Shopware: Creating media from URL', { sourceUrl: params.sourceUrl, fileName: params.fileName });
+
+    // In mock mode, determine mime type from extension
+    const extension = params.fileName.split('.').pop()?.toLowerCase() || 'jpg';
+    const extToMime: Record<string, string> = {
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      gif: 'image/gif',
+      webp: 'image/webp',
+      svg: 'image/svg+xml',
+    };
+    const mimeType = extToMime[extension] || 'image/jpeg';
+
+    const created = await this.prisma.mockShopwareMedia.create({
+      data: {
+        tenantId: this.tenantId,
+        fileName: params.fileName.replace(/\.[^/.]+$/, ''),
+        fileExtension: extension,
+        mimeType,
+        title: params.title,
+        alt: params.alt,
+        folderId: params.folderId,
+        sourceUrl: params.sourceUrl,
+        fileSize: 0, // We don't actually download in mock mode
+      },
+    });
+
+    return {
+      id: created.id,
+      productNumber: '',
+      action: 'create',
+      success: true,
+      mimeType,
+      fileSize: 0,
+    };
+  }
+
+  /**
+   * Get media by ID
+   */
+  async getMediaById(id: string): Promise<{ id: string; fileName: string; mimeType: string; fileSize: number } | null> {
+    const media = await this.prisma.mockShopwareMedia.findUnique({
+      where: { id },
+    });
+
+    if (!media) return null;
+
+    return {
+      id: media.id,
+      fileName: `${media.fileName}.${media.fileExtension}`,
+      mimeType: media.mimeType,
+      fileSize: media.fileSize || 0,
+    };
+  }
+
+  /**
+   * Check if media exists by ID
+   */
+  async mediaExists(id: string): Promise<boolean> {
+    const media = await this.prisma.mockShopwareMedia.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    return !!media;
+  }
+
+  /**
+   * Get or create a media folder by name
+   */
+  async getOrCreateMediaFolder(folderName: string): Promise<string> {
+    this.log.info('Mock Shopware: Getting or creating media folder', { folderName });
+
+    // In mock mode, we just return a deterministic UUID based on folder name
+    // This simulates folder management without actually storing folders
+    const crypto = await import('crypto');
+    const folderId = crypto.createHash('md5').update(`${this.tenantId}-${folderName}`).digest('hex');
+
+    return folderId;
+  }
+
   /**
    * Test connection - always succeeds for mock
    */
@@ -615,6 +765,8 @@ export class MockShopwareClient implements IShopwareClient {
 
     return {
       id: created.id,
+      productNumber: '',
+      action: 'create',
       success: true,
     };
   }
@@ -641,6 +793,8 @@ export class MockShopwareClient implements IShopwareClient {
 
     return {
       id: updated.id,
+      productNumber: '',
+      action: 'update',
       success: true,
     };
   }
@@ -694,17 +848,29 @@ export class MockShopwareClient implements IShopwareClient {
   async bulkSyncCategories(categories: ShopwareCategory[]): Promise<ShopwareBulkSyncResult> {
     this.log.info('Mock Shopware: Bulk syncing categories', { count: categories.length });
 
-    const results: ShopwareSyncResult[] = [];
+    const results: ShopwareBulkItemResult[] = [];
 
     for (const category of categories) {
       try {
         // Upsert pattern: if ID provided and exists, update; otherwise create
         if (category.id && (await this.categoryExists(category.id))) {
           const result = await this.updateCategory(category.id, category);
-          results.push(result);
+          results.push({
+            productNumber: '',
+            shopwareId: result.id,
+            action: 'update',
+            success: result.success,
+            error: result.error,
+          });
         } else {
           const result = await this.createCategory(category);
-          results.push(result);
+          results.push({
+            productNumber: '',
+            shopwareId: result.id,
+            action: 'create',
+            success: result.success,
+            error: result.error,
+          });
         }
       } catch (error) {
         this.log.error('Mock Shopware: Failed to sync category', {
@@ -712,21 +878,20 @@ export class MockShopwareClient implements IShopwareClient {
           error: error instanceof Error ? error.message : String(error),
         });
         results.push({
-          id: category.id || '',
+          productNumber: '',
+          shopwareId: category.id || '',
+          action: 'create',
           success: false,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
 
-    const successCount = results.filter((r) => r.success).length;
     const failedCount = results.filter((r) => !r.success).length;
 
     return {
       success: failedCount === 0,
       results,
-      successCount,
-      failedCount,
     };
   }
 
@@ -757,6 +922,8 @@ export class MockShopwareClient implements IShopwareClient {
 
     return {
       id: created.id,
+      productNumber: '',
+      action: 'create',
       success: true,
     };
   }
@@ -790,6 +957,8 @@ export class MockShopwareClient implements IShopwareClient {
 
     return {
       id: updated.id,
+      productNumber: '',
+      action: 'update',
       success: true,
     };
   }
@@ -933,17 +1102,29 @@ export class MockShopwareClient implements IShopwareClient {
   ): Promise<ShopwareBulkSyncResult> {
     this.log.info('Mock Shopware: Bulk syncing manufacturers', { count: manufacturers.length });
 
-    const results: ShopwareSyncResult[] = [];
+    const results: ShopwareBulkItemResult[] = [];
 
     for (const manufacturer of manufacturers) {
       try {
         // Upsert pattern: if ID provided and exists, update; otherwise create
         if (manufacturer.id && (await this.manufacturerExists(manufacturer.id))) {
           const result = await this.updateManufacturer(manufacturer.id, manufacturer);
-          results.push(result);
+          results.push({
+            productNumber: '',
+            shopwareId: result.id,
+            action: 'update',
+            success: result.success,
+            error: result.error,
+          });
         } else {
           const result = await this.createManufacturer(manufacturer);
-          results.push(result);
+          results.push({
+            productNumber: '',
+            shopwareId: result.id,
+            action: 'create',
+            success: result.success,
+            error: result.error,
+          });
         }
       } catch (error) {
         this.log.error('Mock Shopware: Failed to sync manufacturer', {
@@ -951,23 +1132,20 @@ export class MockShopwareClient implements IShopwareClient {
           error: error instanceof Error ? error.message : String(error),
         });
         results.push({
-          id: manufacturer.id || '',
           productNumber: '',
-          action: 'error',
+          shopwareId: manufacturer.id || '',
+          action: 'create',
           success: false,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
 
-    const successCount = results.filter((r) => r.success).length;
     const failedCount = results.filter((r) => !r.success).length;
 
     return {
       success: failedCount === 0,
       results,
-      successCount,
-      failedCount,
     };
   }
 
@@ -1064,17 +1242,29 @@ export class MockShopwareClient implements IShopwareClient {
   ): Promise<ShopwareBulkSyncResult> {
     this.log.info('Mock Shopware: Bulk syncing units', { count: units.length });
 
-    const results: ShopwareSyncResult[] = [];
+    const results: ShopwareBulkItemResult[] = [];
 
     for (const unit of units) {
       try {
         // Upsert pattern: if ID provided and exists, update; otherwise create
         if (unit.id && (await this.unitExists(unit.id))) {
           const result = await this.updateUnit(unit.id, unit);
-          results.push(result);
+          results.push({
+            productNumber: '',
+            shopwareId: result.id,
+            action: 'update',
+            success: result.success,
+            error: result.error,
+          });
         } else {
           const result = await this.createUnit(unit);
-          results.push(result);
+          results.push({
+            productNumber: '',
+            shopwareId: result.id,
+            action: 'create',
+            success: result.success,
+            error: result.error,
+          });
         }
       } catch (error) {
         this.log.error('Mock Shopware: Failed to sync unit', {
@@ -1082,23 +1272,20 @@ export class MockShopwareClient implements IShopwareClient {
           error: error instanceof Error ? error.message : String(error),
         });
         results.push({
-          id: unit.id || '',
           productNumber: '',
-          action: 'error',
+          shopwareId: unit.id || '',
+          action: 'create',
           success: false,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
 
-    const successCount = results.filter((r) => r.success).length;
     const failedCount = results.filter((r) => !r.success).length;
 
     return {
       success: failedCount === 0,
       results,
-      successCount,
-      failedCount,
     };
   }
 
@@ -1300,17 +1487,29 @@ export class MockShopwareClient implements IShopwareClient {
   ): Promise<ShopwareBulkSyncResult> {
     this.log.info('Mock Shopware: Bulk syncing property groups', { count: groups.length });
 
-    const results: ShopwareSyncResult[] = [];
+    const results: ShopwareBulkItemResult[] = [];
 
     for (const group of groups) {
       try {
         // Upsert pattern: if ID provided and exists, update; otherwise create
         if (group.id && (await this.propertyGroupExists(group.id))) {
           const result = await this.updatePropertyGroup(group.id, group);
-          results.push(result);
+          results.push({
+            productNumber: '',
+            shopwareId: result.id,
+            action: 'update',
+            success: result.success,
+            error: result.error,
+          });
         } else {
           const result = await this.createPropertyGroup(group);
-          results.push(result);
+          results.push({
+            productNumber: '',
+            shopwareId: result.id,
+            action: 'create',
+            success: result.success,
+            error: result.error,
+          });
         }
       } catch (error) {
         this.log.error('Mock Shopware: Failed to sync property group', {
@@ -1318,23 +1517,20 @@ export class MockShopwareClient implements IShopwareClient {
           error: error instanceof Error ? error.message : String(error),
         });
         results.push({
-          id: group.id || '',
           productNumber: '',
-          action: 'error',
+          shopwareId: group.id || '',
+          action: 'create',
           success: false,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
 
-    const successCount = results.filter((r) => r.success).length;
     const failedCount = results.filter((r) => !r.success).length;
 
     return {
       success: failedCount === 0,
       results,
-      successCount,
-      failedCount,
     };
   }
 
@@ -1346,17 +1542,29 @@ export class MockShopwareClient implements IShopwareClient {
   ): Promise<ShopwareBulkSyncResult> {
     this.log.info('Mock Shopware: Bulk syncing property options', { count: options.length });
 
-    const results: ShopwareSyncResult[] = [];
+    const results: ShopwareBulkItemResult[] = [];
 
     for (const option of options) {
       try {
         // Upsert pattern: if ID provided and exists, update; otherwise create
         if (option.id && (await this.propertyOptionExists(option.id))) {
           const result = await this.updatePropertyOption(option.id, option);
-          results.push(result);
+          results.push({
+            productNumber: '',
+            shopwareId: result.id,
+            action: 'update',
+            success: result.success,
+            error: result.error,
+          });
         } else {
           const result = await this.createPropertyOption(option);
-          results.push(result);
+          results.push({
+            productNumber: '',
+            shopwareId: result.id,
+            action: 'create',
+            success: result.success,
+            error: result.error,
+          });
         }
       } catch (error) {
         this.log.error('Mock Shopware: Failed to sync property option', {
@@ -1364,23 +1572,20 @@ export class MockShopwareClient implements IShopwareClient {
           error: error instanceof Error ? error.message : String(error),
         });
         results.push({
-          id: option.id || '',
           productNumber: '',
-          action: 'error',
+          shopwareId: option.id || '',
+          action: 'create',
           success: false,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
 
-    const successCount = results.filter((r) => r.success).length;
     const failedCount = results.filter((r) => !r.success).length;
 
     return {
       success: failedCount === 0,
       results,
-      successCount,
-      failedCount,
     };
   }
 

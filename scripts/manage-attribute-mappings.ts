@@ -22,7 +22,7 @@
 
 import 'dotenv/config';
 import { PrismaClient, MappingType } from '@prisma/client';
-import { MockShopwareClient } from '../src/clients/MockShopwareClient';
+import { createShopwareClient } from '../src/clients/ShopwareClientFactory';
 
 const prisma = new PrismaClient();
 
@@ -176,7 +176,7 @@ async function addAttributeMapping(
   }
 
   // Verify Shopware property group exists
-  const shopware = new MockShopwareClient({ tenantId });
+  const shopware = createShopwareClient({ tenantId });
   await shopware.authenticate();
 
   const groupExists = await shopware.propertyGroupExists(shopwarePropertyGroupId);
@@ -252,7 +252,7 @@ async function addAttributeValueMapping(
   }
 
   // Verify Shopware property group exists
-  const shopware = new MockShopwareClient({ tenantId });
+  const shopware = createShopwareClient({ tenantId });
   await shopware.authenticate();
 
   const groupExists = await shopware.propertyGroupExists(shopwarePropertyGroupId);

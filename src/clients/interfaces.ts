@@ -221,6 +221,53 @@ export interface IShopwareClient {
    */
   bulkSyncUnits(units: ShopwareUnit[]): Promise<ShopwareBulkSyncResult>;
 
+  // ============================================
+  // MEDIA METHODS
+  // ============================================
+
+  /**
+   * Create a media entity in Shopware (without uploading file yet)
+   */
+  createMedia(params: {
+    fileName: string;
+    folderId?: string;
+    title?: string;
+    alt?: string;
+  }): Promise<ShopwareSyncResult>;
+
+  /**
+   * Upload media file from URL to an existing media entity
+   * Downloads the file from the URL and uploads it to Shopware
+   */
+  uploadMediaFromUrl(mediaId: string, sourceUrl: string, fileName: string): Promise<ShopwareSyncResult>;
+
+  /**
+   * Create media and upload from URL in one operation
+   * Combines createMedia + uploadMediaFromUrl
+   */
+  createMediaFromUrl(params: {
+    sourceUrl: string;
+    fileName: string;
+    folderId?: string;
+    title?: string;
+    alt?: string;
+  }): Promise<ShopwareSyncResult & { mimeType?: string; fileSize?: number }>;
+
+  /**
+   * Get media by ID
+   */
+  getMediaById(id: string): Promise<{ id: string; fileName: string; mimeType: string; fileSize: number } | null>;
+
+  /**
+   * Check if media exists by ID
+   */
+  mediaExists(id: string): Promise<boolean>;
+
+  /**
+   * Get or create a media folder by name
+   */
+  getOrCreateMediaFolder(folderName: string): Promise<string>;
+
   /**
    * Test connection to Shopware API
    */

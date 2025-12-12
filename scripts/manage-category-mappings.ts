@@ -12,7 +12,7 @@
 
 import 'dotenv/config';
 import { PrismaClient, MappingType } from '@prisma/client';
-import { MockShopwareClient } from '../src/clients/MockShopwareClient';
+import { createShopwareClient } from '../src/clients/ShopwareClientFactory';
 
 const prisma = new PrismaClient();
 
@@ -107,7 +107,7 @@ async function addMapping(
   }
 
   // Verify Shopware category exists
-  const shopware = new MockShopwareClient({ tenantId });
+  const shopware = createShopwareClient({ tenantId });
   await shopware.authenticate();
 
   const categoryExists = await shopware.categoryExists(shopwareCategoryId);

@@ -48,6 +48,8 @@ model Tenant {
   mockShopwareManufacturers MockShopwareManufacturer[]
   unitMappings              UnitMapping[]
   mockShopwareUnits         MockShopwareUnit[]
+  mediaMappings             MediaMapping[]
+  mockShopwareMedia         MockShopwareMedia[]
 
   @@index([status])
   @@map("tenants")
@@ -800,4 +802,86 @@ model MockShopwareUnit {
   @@unique([tenantId, shortCode])
   @@index([tenantId])
   @@map("mock_shopware_units")
+}
+
+// ============================================
+// MEDIA MAPPING (Source URL ↔ Shopware Media)
+// ============================================
+
+model MediaMapping {
+  id                  String          @id @default(uuid())
+  tenantId            String          @map("tenant_id")
+  tenant              Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Source information
+  sourceUrl           String          @map("source_url")       // Original URL (e.g., from Plenty)
+  sourceUrlHash       String          @map("source_url_hash")  // MD5/SHA hash for faster lookups
+  sourceType          MediaSourceType @map("source_type")      // What entity this media belongs to
+  sourceEntityId      String?         @map("source_entity_id") // ID of the source entity (optional)
+
+  // Shopware information
+  shopwareMediaId     String          @map("shopware_media_id")
+  shopwareFolderId    String?         @map("shopware_folder_id")
+  fileName            String?         @map("file_name")
+  mimeType            String?         @map("mime_type")
+  fileSize            Int?            @map("file_size")
+
+  // Mapping metadata
+  mappingType         MappingType     @map("mapping_type")
+  lastSyncedAt        DateTime        @map("last_synced_at")
+  lastSyncAction      String          @map("last_sync_action") // 'create', 'update'
+
+  // Timestamps
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+
+  @@unique([tenantId, sourceUrlHash])
+  @@unique([tenantId, shopwareMediaId])
+  @@index([tenantId, sourceType])
+  @@index([tenantId, sourceEntityId])
+  @@map("media_mappings")
+}
+
+enum MediaSourceType {
+  MANUFACTURER_LOGO
+  PRODUCT_IMAGE
+  CATEGORY_IMAGE
+  PROPERTY_OPTION_IMAGE
+  OTHER
+}
+
+// ============================================
+// MOCK SHOPWARE MEDIA
+// ============================================
+
+model MockShopwareMedia {
+  id                  String   @id @default(uuid())
+  tenantId            String   @map("tenant_id")
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Core media data
+  fileName            String   @map("file_name")
+  fileExtension       String   @map("file_extension")
+  mimeType            String   @map("mime_type")
+  fileSize            Int?     @map("file_size")
+  title               String?
+  alt                 String?
+
+  // Folder organization
+  folderId            String?  @map("folder_id")
+  folderName          String?  @map("folder_name")
+
+  // Source reference (for tracking where it came from)
+  sourceUrl           String?  @map("source_url")
+
+  // Raw data for debugging
+  rawShopwareData     Json?    @map("raw_shopware_data")
+
+  // Timestamps
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId])
+  @@index([tenantId, folderId])
+  @@map("mock_shopware_media")
 }
