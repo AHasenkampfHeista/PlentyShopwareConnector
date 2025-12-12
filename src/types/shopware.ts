@@ -195,6 +195,9 @@ export interface ShopwareManufacturer {
   name?: string;
   description?: string;
   translations?: Record<string, { name: string; description?: string }>;
+
+  // Plenty reference (internal use)
+  _plentyManufacturerId?: number;
 }
 
 // ============================================
@@ -206,6 +209,9 @@ export interface ShopwareUnit {
   shortCode: string;
   name?: string;
   translations?: Record<string, { shortCode: string; name?: string }>;
+
+  // Plenty reference (internal use)
+  _plentyUnitId?: number;
 }
 
 // ============================================

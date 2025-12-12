@@ -71,13 +71,13 @@ export class ConfigSyncProcessor {
       //result.attributes = await this.syncAttributes(jobData.tenantId, plenty);
 
       log.info('Syncing sales prices');
-      result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty, shopware);
+      //result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing manufacturers');
-      //result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty);
+      //result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing units');
-      //result.units = await this.syncUnits(jobData.tenantId, plenty);
+      //result.units = await this.syncUnits(jobData.tenantId, plenty, shopware);
 
       // Update sync state
       await this.updateSyncState(jobData.tenantId);
@@ -435,7 +435,8 @@ export class ConfigSyncProcessor {
    */
   private async syncManufacturers(
     tenantId: string,
-    plenty: PlentyClient
+    plenty: PlentyClient,
+    shopware: IShopwareClient
   ): Promise<{ synced: number; errors: number }> {
     let synced = 0;
     let errors = 0;
@@ -445,7 +446,7 @@ export class ConfigSyncProcessor {
 
       for (const manufacturer of manufacturers) {
         try {
-          await this.upsertManufacturer(tenantId, manufacturer);
+          await this.upsertManufacturer(tenantId, manufacturer, shopware);
           synced++;
         } catch (error) {
           errors++;
@@ -463,8 +464,10 @@ export class ConfigSyncProcessor {
    */
   private async upsertManufacturer(
     tenantId: string,
-    manufacturer: PlentyManufacturer
+    manufacturer: PlentyManufacturer,
+    shopware: IShopwareClient
   ): Promise<void> {
+    // Save to local cache
     await this.prisma.plentyManufacturer.upsert({
       where: {
         tenantId_id: {
@@ -517,6 +520,52 @@ export class ConfigSyncProcessor {
         syncedAt: new Date(),
       },
     });
+
+    // Check if mapping exists
+    const { ManufacturerMappingService } = await import('../services/ManufacturerMappingService');
+    const mappingService = new ManufacturerMappingService();
+
+    const existingMapping = await mappingService.getMapping(tenantId, manufacturer.id);
+
+    if (!existingMapping) {
+      // No mapping exists - create manufacturer in Shopware
+      const result = await shopware.createManufacturer({
+        id: '',
+        name: manufacturer.name,
+        link: manufacturer.url || undefined,
+        description: manufacturer.comment || undefined,
+        _plentyManufacturerId: manufacturer.id,
+      });
+
+      if (result.success && result.id) {
+        // Store the mapping
+        await mappingService.upsertMappings(tenantId, [
+          {
+            plentyManufacturerId: manufacturer.id,
+            shopwareManufacturerId: result.id,
+            mappingType: 'AUTO',
+            lastSyncAction: 'create',
+          },
+        ]);
+      }
+    } else {
+      // Mapping exists - optionally update the manufacturer in Shopware
+      await shopware.updateManufacturer(existingMapping.shopwareManufacturerId, {
+        name: manufacturer.name,
+        link: manufacturer.url || undefined,
+        description: manufacturer.comment || undefined,
+      });
+
+      // Update mapping sync time
+      await mappingService.upsertMappings(tenantId, [
+        {
+          plentyManufacturerId: manufacturer.id,
+          shopwareManufacturerId: existingMapping.shopwareManufacturerId,
+          mappingType: existingMapping.mappingType as 'MANUAL' | 'AUTO',
+          lastSyncAction: 'update',
+        },
+      ]);
+    }
   }
 
   /**
@@ -524,7 +573,8 @@ export class ConfigSyncProcessor {
    */
   private async syncUnits(
     tenantId: string,
-    plenty: PlentyClient
+    plenty: PlentyClient,
+    shopware: IShopwareClient
   ): Promise<{ synced: number; errors: number }> {
     let synced = 0;
     let errors = 0;
@@ -534,7 +584,7 @@ export class ConfigSyncProcessor {
 
       for (const unit of units) {
         try {
-          await this.upsertUnit(tenantId, unit);
+          await this.upsertUnit(tenantId, unit, shopware);
           synced++;
         } catch (error) {
           errors++;
@@ -550,7 +600,11 @@ export class ConfigSyncProcessor {
   /**
    * Upsert a single unit
    */
-  private async upsertUnit(tenantId: string, unit: PlentyUnit): Promise<void> {
+  private async upsertUnit(
+    tenantId: string,
+    unit: PlentyUnit,
+    shopware: IShopwareClient
+  ): Promise<void> {
     // Extract localized names
     const names: Record<string, string> = {};
     if (unit.names) {
@@ -559,6 +613,7 @@ export class ConfigSyncProcessor {
       }
     }
 
+    // Save to local cache
     await this.prisma.plentyUnit.upsert({
       where: {
         tenantId_id: {
@@ -585,6 +640,53 @@ export class ConfigSyncProcessor {
         syncedAt: new Date(),
       },
     });
+
+    // Check if mapping exists
+    const { UnitMappingService } = await import('../services/UnitMappingService');
+    const mappingService = new UnitMappingService();
+
+    const existingMapping = await mappingService.getMapping(tenantId, unit.id);
+
+    // Get unit name (prefer de -> en -> first available)
+    const unitName = names['de'] || names['en'] || Object.values(names)[0] || unit.unitOfMeasurement;
+
+    if (!existingMapping) {
+      // No mapping exists - create unit in Shopware
+      const result = await shopware.createUnit({
+        id: '',
+        shortCode: unit.unitOfMeasurement,
+        name: unitName,
+        _plentyUnitId: unit.id,
+      });
+
+      if (result.success && result.id) {
+        // Store the mapping
+        await mappingService.upsertMappings(tenantId, [
+          {
+            plentyUnitId: unit.id,
+            shopwareUnitId: result.id,
+            mappingType: 'AUTO',
+            lastSyncAction: 'create',
+          },
+        ]);
+      }
+    } else {
+      // Mapping exists - optionally update the unit in Shopware
+      await shopware.updateUnit(existingMapping.shopwareUnitId, {
+        shortCode: unit.unitOfMeasurement,
+        name: unitName,
+      });
+
+      // Update mapping sync time
+      await mappingService.upsertMappings(tenantId, [
+        {
+          plentyUnitId: unit.id,
+          shopwareUnitId: existingMapping.shopwareUnitId,
+          mappingType: existingMapping.mappingType as 'MANUAL' | 'AUTO',
+          lastSyncAction: 'update',
+        },
+      ]);
+    }
   }
 
   /**

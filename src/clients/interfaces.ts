@@ -7,6 +7,8 @@ import {
   ShopwareSyncResult,
   ShopwareBulkProduct,
   ShopwareBulkSyncResult,
+  ShopwareManufacturer,
+  ShopwareUnit,
 } from '../types/shopware';
 
 /**
@@ -168,6 +170,56 @@ export interface IShopwareClient {
    * Check if price exists by ID
    */
   priceExists(id: string): Promise<boolean>;
+
+  /**
+   * Create a new manufacturer
+   */
+  createManufacturer(manufacturer: ShopwareManufacturer): Promise<ShopwareSyncResult>;
+
+  /**
+   * Update an existing manufacturer by ID
+   */
+  updateManufacturer(id: string, manufacturer: Partial<ShopwareManufacturer>): Promise<ShopwareSyncResult>;
+
+  /**
+   * Get manufacturer by ID
+   */
+  getManufacturerById(id: string): Promise<ShopwareManufacturer | null>;
+
+  /**
+   * Check if manufacturer exists by ID
+   */
+  manufacturerExists(id: string): Promise<boolean>;
+
+  /**
+   * Bulk sync manufacturers (create or update in batch)
+   */
+  bulkSyncManufacturers(manufacturers: ShopwareManufacturer[]): Promise<ShopwareBulkSyncResult>;
+
+  /**
+   * Create a new unit
+   */
+  createUnit(unit: ShopwareUnit): Promise<ShopwareSyncResult>;
+
+  /**
+   * Update an existing unit by ID
+   */
+  updateUnit(id: string, unit: Partial<ShopwareUnit>): Promise<ShopwareSyncResult>;
+
+  /**
+   * Get unit by ID
+   */
+  getUnitById(id: string): Promise<ShopwareUnit | null>;
+
+  /**
+   * Check if unit exists by ID
+   */
+  unitExists(id: string): Promise<boolean>;
+
+  /**
+   * Bulk sync units (create or update in batch)
+   */
+  bulkSyncUnits(units: ShopwareUnit[]): Promise<ShopwareBulkSyncResult>;
 
   /**
    * Test connection to Shopware API

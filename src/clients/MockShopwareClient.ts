@@ -12,6 +12,8 @@ import {
   ShopwareCategory,
   ShopwarePropertyGroup,
   ShopwarePropertyOption,
+  ShopwareManufacturer,
+  ShopwareUnit,
 } from '../types/shopware';
 
 /**
@@ -830,6 +832,274 @@ export class MockShopwareClient implements IShopwareClient {
     });
 
     return price !== null && price.tenantId === this.tenantId;
+  }
+
+  /**
+   * Create a new manufacturer
+   */
+  async createManufacturer(manufacturer: ShopwareManufacturer): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Creating manufacturer', { name: manufacturer.name });
+
+    const created = await this.prisma.mockShopwareManufacturer.create({
+      data: {
+        id: manufacturer.id || crypto.randomUUID(),
+        tenantId: this.tenantId,
+        name: manufacturer.name || 'Unnamed Manufacturer',
+        link: manufacturer.link,
+        description: manufacturer.description,
+        mediaId: manufacturer.mediaId,
+        plentyManufacturerId: manufacturer._plentyManufacturerId,
+        translations: manufacturer.translations as unknown as object,
+        rawShopwareData: manufacturer as unknown as object,
+      },
+    });
+
+    return {
+      id: created.id,
+      productNumber: '', // Not applicable for manufacturers
+      action: 'create',
+      success: true,
+    };
+  }
+
+  /**
+   * Update an existing manufacturer by ID
+   */
+  async updateManufacturer(
+    id: string,
+    manufacturer: Partial<ShopwareManufacturer>
+  ): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Updating manufacturer', { id });
+
+    const updated = await this.prisma.mockShopwareManufacturer.update({
+      where: { id },
+      data: {
+        name: manufacturer.name,
+        link: manufacturer.link,
+        description: manufacturer.description,
+        mediaId: manufacturer.mediaId,
+        translations: manufacturer.translations as unknown as object,
+        rawShopwareData: manufacturer as unknown as object,
+      },
+    });
+
+    return {
+      id: updated.id,
+      productNumber: '', // Not applicable for manufacturers
+      action: 'update',
+      success: true,
+    };
+  }
+
+  /**
+   * Get manufacturer by ID
+   */
+  async getManufacturerById(id: string): Promise<ShopwareManufacturer | null> {
+    const manufacturer = await this.prisma.mockShopwareManufacturer.findUnique({
+      where: { id },
+    });
+
+    if (!manufacturer || manufacturer.tenantId !== this.tenantId) {
+      return null;
+    }
+
+    return {
+      id: manufacturer.id,
+      name: manufacturer.name,
+      link: manufacturer.link || undefined,
+      description: manufacturer.description || undefined,
+      mediaId: manufacturer.mediaId || undefined,
+      translations: manufacturer.translations as Record<string, { name: string; description?: string }>,
+      _plentyManufacturerId: manufacturer.plentyManufacturerId || undefined,
+    };
+  }
+
+  /**
+   * Check if manufacturer exists by ID
+   */
+  async manufacturerExists(id: string): Promise<boolean> {
+    const manufacturer = await this.prisma.mockShopwareManufacturer.findUnique({
+      where: { id },
+    });
+
+    return manufacturer !== null && manufacturer.tenantId === this.tenantId;
+  }
+
+  /**
+   * Bulk sync manufacturers (create or update in batch)
+   */
+  async bulkSyncManufacturers(
+    manufacturers: ShopwareManufacturer[]
+  ): Promise<ShopwareBulkSyncResult> {
+    this.log.info('Mock Shopware: Bulk syncing manufacturers', { count: manufacturers.length });
+
+    const results: ShopwareSyncResult[] = [];
+
+    for (const manufacturer of manufacturers) {
+      try {
+        // Upsert pattern: if ID provided and exists, update; otherwise create
+        if (manufacturer.id && (await this.manufacturerExists(manufacturer.id))) {
+          const result = await this.updateManufacturer(manufacturer.id, manufacturer);
+          results.push(result);
+        } else {
+          const result = await this.createManufacturer(manufacturer);
+          results.push(result);
+        }
+      } catch (error) {
+        this.log.error('Mock Shopware: Failed to sync manufacturer', {
+          manufacturer: manufacturer.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        results.push({
+          id: manufacturer.id || '',
+          productNumber: '',
+          action: 'error',
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const successCount = results.filter((r) => r.success).length;
+    const failedCount = results.filter((r) => !r.success).length;
+
+    return {
+      success: failedCount === 0,
+      results,
+      successCount,
+      failedCount,
+    };
+  }
+
+  /**
+   * Create a new unit
+   */
+  async createUnit(unit: ShopwareUnit): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Creating unit', { shortCode: unit.shortCode, name: unit.name });
+
+    const created = await this.prisma.mockShopwareUnit.create({
+      data: {
+        id: unit.id || crypto.randomUUID(),
+        tenantId: this.tenantId,
+        shortCode: unit.shortCode,
+        name: unit.name,
+        plentyUnitId: unit._plentyUnitId,
+        translations: unit.translations as unknown as object,
+        rawShopwareData: unit as unknown as object,
+      },
+    });
+
+    return {
+      id: created.id,
+      productNumber: '', // Not applicable for units
+      action: 'create',
+      success: true,
+    };
+  }
+
+  /**
+   * Update an existing unit by ID
+   */
+  async updateUnit(
+    id: string,
+    unit: Partial<ShopwareUnit>
+  ): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: Updating unit', { id });
+
+    const updated = await this.prisma.mockShopwareUnit.update({
+      where: { id },
+      data: {
+        shortCode: unit.shortCode,
+        name: unit.name,
+        translations: unit.translations as unknown as object,
+        rawShopwareData: unit as unknown as object,
+      },
+    });
+
+    return {
+      id: updated.id,
+      productNumber: '', // Not applicable for units
+      action: 'update',
+      success: true,
+    };
+  }
+
+  /**
+   * Get unit by ID
+   */
+  async getUnitById(id: string): Promise<ShopwareUnit | null> {
+    const unit = await this.prisma.mockShopwareUnit.findUnique({
+      where: { id },
+    });
+
+    if (!unit || unit.tenantId !== this.tenantId) {
+      return null;
+    }
+
+    return {
+      id: unit.id,
+      shortCode: unit.shortCode,
+      name: unit.name || undefined,
+      translations: unit.translations as Record<string, { shortCode: string; name?: string }>,
+      _plentyUnitId: unit.plentyUnitId || undefined,
+    };
+  }
+
+  /**
+   * Check if unit exists by ID
+   */
+  async unitExists(id: string): Promise<boolean> {
+    const unit = await this.prisma.mockShopwareUnit.findUnique({
+      where: { id },
+    });
+
+    return unit !== null && unit.tenantId === this.tenantId;
+  }
+
+  /**
+   * Bulk sync units (create or update in batch)
+   */
+  async bulkSyncUnits(
+    units: ShopwareUnit[]
+  ): Promise<ShopwareBulkSyncResult> {
+    this.log.info('Mock Shopware: Bulk syncing units', { count: units.length });
+
+    const results: ShopwareSyncResult[] = [];
+
+    for (const unit of units) {
+      try {
+        // Upsert pattern: if ID provided and exists, update; otherwise create
+        if (unit.id && (await this.unitExists(unit.id))) {
+          const result = await this.updateUnit(unit.id, unit);
+          results.push(result);
+        } else {
+          const result = await this.createUnit(unit);
+          results.push(result);
+        }
+      } catch (error) {
+        this.log.error('Mock Shopware: Failed to sync unit', {
+          unit: unit.shortCode,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        results.push({
+          id: unit.id || '',
+          productNumber: '',
+          action: 'error',
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const successCount = results.filter((r) => r.success).length;
+    const failedCount = results.filter((r) => !r.success).length;
+
+    return {
+      success: failedCount === 0,
+      results,
+      successCount,
+      failedCount,
+    };
   }
 
   /**

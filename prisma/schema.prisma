@@ -44,6 +44,10 @@ model Tenant {
   attributeMappings         AttributeMapping[]
   attributeValueMappings    AttributeValueMapping[]
   salesPriceMappings        SalesPriceMapping[]
+  manufacturerMappings      ManufacturerMapping[]
+  mockShopwareManufacturers MockShopwareManufacturer[]
+  unitMappings              UnitMapping[]
+  mockShopwareUnits         MockShopwareUnit[]
 
   @@index([status])
   @@map("tenants")
@@ -671,4 +675,129 @@ model MockShopwarePrice {
   @@index([tenantId])
   @@index([tenantId, type])
   @@map("mock_shopware_prices")
+}
+
+// ============================================
+// MANUFACTURER MAPPING (Plenty ↔ Shopware)
+// ============================================
+
+model ManufacturerMapping {
+  id                       String      @id @default(uuid())
+  tenantId                 String      @map("tenant_id")
+  tenant                   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // PlentyMarkets identifiers
+  plentyManufacturerId     Int         @map("plenty_manufacturer_id")
+
+  // Shopware identifiers
+  shopwareManufacturerId   String      @map("shopware_manufacturer_id")
+
+  // Mapping metadata
+  mappingType              MappingType @map("mapping_type")
+  lastSyncedAt             DateTime    @map("last_synced_at")
+  lastSyncAction           String      @map("last_sync_action") // 'create', 'update'
+
+  // Timestamps
+  createdAt                DateTime    @default(now()) @map("created_at")
+  updatedAt                DateTime    @updatedAt @map("updated_at")
+
+  @@unique([tenantId, plentyManufacturerId])
+  @@unique([tenantId, shopwareManufacturerId])
+  @@index([tenantId, mappingType])
+  @@map("manufacturer_mappings")
+}
+
+// ============================================
+// MOCK SHOPWARE MANUFACTURERS
+// ============================================
+
+model MockShopwareManufacturer {
+  id                     String   @id @default(uuid())
+  tenantId               String   @map("tenant_id")
+  tenant                 Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Core manufacturer data
+  name                   String
+  link                   String?
+  description            String?
+  mediaId                String?  @map("media_id")
+
+  // Plenty reference
+  plentyManufacturerId   Int?     @map("plenty_manufacturer_id")
+
+  // Translations stored as JSON: { "de": { "name": "...", "description": "..." }, "en": { ... } }
+  translations           Json?
+
+  // Raw data for debugging
+  rawShopwareData        Json?    @map("raw_shopware_data")
+
+  // Timestamps
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, plentyManufacturerId])
+  @@index([tenantId])
+  @@map("mock_shopware_manufacturers")
+}
+
+// ============================================
+// UNIT MAPPING (Plenty ↔ Shopware)
+// ============================================
+
+model UnitMapping {
+  id                    String      @id @default(uuid())
+  tenantId              String      @map("tenant_id")
+  tenant                Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // PlentyMarkets identifiers
+  plentyUnitId          Int         @map("plenty_unit_id")
+
+  // Shopware identifiers
+  shopwareUnitId        String      @map("shopware_unit_id")
+
+  // Mapping metadata
+  mappingType           MappingType @map("mapping_type")
+  lastSyncedAt          DateTime    @map("last_synced_at")
+  lastSyncAction        String      @map("last_sync_action") // 'create', 'update'
+
+  // Timestamps
+  createdAt             DateTime    @default(now()) @map("created_at")
+  updatedAt             DateTime    @updatedAt @map("updated_at")
+
+  @@unique([tenantId, plentyUnitId])
+  @@unique([tenantId, shopwareUnitId])
+  @@index([tenantId, mappingType])
+  @@map("unit_mappings")
+}
+
+// ============================================
+// MOCK SHOPWARE UNITS
+// ============================================
+
+model MockShopwareUnit {
+  id                  String   @id @default(uuid())
+  tenantId            String   @map("tenant_id")
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Core unit data
+  shortCode           String   @map("short_code") // e.g., "PCS", "KG", "M"
+  name                String?
+
+  // Plenty reference
+  plentyUnitId        Int?     @map("plenty_unit_id")
+
+  // Translations stored as JSON: { "de": { "shortCode": "STK", "name": "Stück" }, "en": { ... } }
+  translations        Json?
+
+  // Raw data for debugging
+  rawShopwareData     Json?    @map("raw_shopware_data")
+
+  // Timestamps
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, plentyUnitId])
+  @@unique([tenantId, shortCode])
+  @@index([tenantId])
+  @@map("mock_shopware_units")
 }
