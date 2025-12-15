@@ -77,7 +77,7 @@ export class ConfigSyncProcessor {
       //result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing units');
-      //result.units = await this.syncUnits(jobData.tenantId, plenty, shopware);
+      result.units = await this.syncUnits(jobData.tenantId, plenty, shopware);
 
       // Update sync state
       await this.updateSyncState(jobData.tenantId);
@@ -540,20 +540,24 @@ export class ConfigSyncProcessor {
       const mediaService = new MediaService();
       const valueMediaIds = new Map<number, string>(); // valueId -> mediaId
 
-      // Plenty frontend URL for images (different from API URL)
-      // TODO: Move this to tenant configuration
-      const plentyFrontendUrl = 'https://plentymarkets.heista.de';
+      // Get Plenty frontend URL from tenant configuration
+      const { TenantConfigService, ConfigKeys } = await import('../services/TenantConfigService');
+      const configService = new TenantConfigService();
+      const plentyFrontendUrl = await configService.getPlentyFrontendUrl(tenantId);
 
-      for (const attribute of attributes) {
-        const displayType = attributeDisplayTypes.get(attribute.id);
-        if (displayType !== 'media') continue;
+      if (!plentyFrontendUrl) {
+        log.warn('Plenty frontend URL not configured, skipping attribute image uploads. Set config key: ' + ConfigKeys.PLENTY_FRONTEND_URL);
+      } else {
+        for (const attribute of attributes) {
+          const displayType = attributeDisplayTypes.get(attribute.id);
+          if (displayType !== 'media') continue;
 
-        const values = attribute.values || attribute.attributeValues || [];
-        for (const value of values) {
-          if (!value.image) continue;
+          const values = attribute.values || attribute.attributeValues || [];
+          for (const value of values) {
+            if (!value.image) continue;
 
-          // Construct full image URL from Plenty frontend
-          const imageUrl = `${plentyFrontendUrl}/images/produkte/grp/${value.image}`;
+            // Construct full image URL from Plenty frontend
+            const imageUrl = `${plentyFrontendUrl}/images/produkte/grp/${value.image}`;
 
           log.debug('Uploading attribute value image', {
             attributeId: attribute.id,
@@ -586,6 +590,7 @@ export class ConfigSyncProcessor {
               imageUrl,
               error: uploadResult.error || 'Unknown error',
             });
+            }
           }
         }
       }
@@ -763,155 +768,113 @@ export class ConfigSyncProcessor {
   }
 
   /**
-   * Sync sales prices from Plenty
+   * Sync sales prices from Plenty - cache locally only
+   * Sales prices are used during product sync to determine which price to use
+   * We don't sync them to Shopware as entities - the price values come from variations
    */
   private async syncSalesPrices(
     tenantId: string,
     plenty: PlentyClient,
-    shopware: IShopwareClient
+    _shopware: IShopwareClient // Unused - kept for interface consistency
   ): Promise<{ synced: number; errors: number }> {
-    let synced = 0;
-    let errors = 0;
+    const log = createJobLogger('', tenantId, 'CONFIG');
 
     try {
       const salesPrices = await plenty.getAllSalesPrices();
 
-      for (const salesPrice of salesPrices) {
-        try {
-          await this.upsertSalesPrice(tenantId, salesPrice, shopware);
-          synced++;
-        } catch (error) {
-          errors++;
-        }
+      if (salesPrices.length === 0) {
+        log.info('No sales prices to sync');
+        return { synced: 0, errors: 0 };
       }
-    } catch (error) {
-      throw new Error(`Failed to fetch sales prices: ${error}`);
-    }
 
-    return { synced, errors };
+      log.info('Caching sales prices locally', { count: salesPrices.length });
+
+      // Bulk upsert to local cache
+      await this.bulkUpsertSalesPricesToCache(tenantId, salesPrices);
+
+      // Log which price types are available for configuration reference
+      const priceTypes = salesPrices.map((sp) => ({
+        id: sp.id,
+        type: sp.type,
+        name: sp.names?.[0]?.nameInternal || 'Unknown',
+      }));
+      log.info('Available sales price types for configuration', { priceTypes });
+
+      log.info('Sales prices cached successfully', { synced: salesPrices.length });
+      return { synced: salesPrices.length, errors: 0 };
+    } catch (error) {
+      log.error('Failed to sync sales prices', { error: error instanceof Error ? error.message : String(error) });
+      throw new Error(`Failed to sync sales prices: ${error}`);
+    }
   }
 
   /**
-   * Upsert a single sales price
+   * Bulk upsert sales prices to local cache
    */
-  private async upsertSalesPrice(
-    tenantId: string,
-    salesPrice: PlentySalesPrice,
-    shopware: IShopwareClient
-  ): Promise<void> {
-    // Extract localized names
-    const names: Record<string, string> = {};
-    if (salesPrice.names) {
-      for (const name of salesPrice.names) {
-        names[name.lang] = name.nameInternal;
-      }
-    }
+  private async bulkUpsertSalesPricesToCache(tenantId: string, salesPrices: PlentySalesPrice[]): Promise<void> {
+    await this.prisma.$transaction(
+      salesPrices.map((salesPrice) => {
+        // Extract localized names
+        const names: Record<string, string> = {};
+        if (salesPrice.names) {
+          for (const name of salesPrice.names) {
+            names[name.lang] = name.nameInternal;
+          }
+        }
 
-    // Extract currency from currencies relation
-    let currency: string | null = null;
-    if (salesPrice.currencies && salesPrice.currencies.length > 0) {
-      currency = salesPrice.currencies[0].currency;
-    }
+        // Extract currency from currencies relation
+        let currency: string | null = null;
+        if (salesPrice.currencies && salesPrice.currencies.length > 0) {
+          currency = salesPrice.currencies[0].currency;
+        }
 
-    // Extract country IDs
-    const countryIds = salesPrice.countries?.map((c) => c.countryId) || [];
+        // Extract IDs from relations
+        const countryIds = salesPrice.countries?.map((c) => c.countryId) || [];
+        const customerClassIds = salesPrice.customerClasses?.map((c) => c.customerClassId) || [];
+        const referrerIds = salesPrice.referrers?.map((r) => r.referrerId) || [];
 
-    // Extract customer class IDs
-    const customerClassIds = salesPrice.customerClasses?.map((c) => c.customerClassId) || [];
-
-    // Extract referrer IDs
-    const referrerIds = salesPrice.referrers?.map((r) => r.referrerId) || [];
-
-    // Save to local cache
-    await this.prisma.plentySalesPrice.upsert({
-      where: {
-        tenantId_id: {
-          tenantId,
-          id: salesPrice.id,
-        },
-      },
-      create: {
-        id: salesPrice.id,
-        tenantId,
-        position: salesPrice.position,
-        minimumOrderQuantity: salesPrice.minimumOrderQuantity,
-        type: salesPrice.type,
-        isCustomerPrice: salesPrice.isCustomerPrice,
-        isDisplayedByDefault: salesPrice.isDisplayedByDefault,
-        isLiveConversion: salesPrice.isLiveConversion,
-        currency,
-        countryIds,
-        customerClassIds,
-        referrerIds,
-        names,
-        rawData: salesPrice as unknown as object,
-        syncedAt: new Date(),
-      },
-      update: {
-        position: salesPrice.position,
-        minimumOrderQuantity: salesPrice.minimumOrderQuantity,
-        type: salesPrice.type,
-        isCustomerPrice: salesPrice.isCustomerPrice,
-        isDisplayedByDefault: salesPrice.isDisplayedByDefault,
-        isLiveConversion: salesPrice.isLiveConversion,
-        currency,
-        countryIds,
-        customerClassIds,
-        referrerIds,
-        names,
-        rawData: salesPrice as unknown as object,
-        syncedAt: new Date(),
-      },
-    });
-
-    // Check if mapping exists
-    const { SalesPriceMappingService } = await import('../services/SalesPriceMappingService');
-    const mappingService = new SalesPriceMappingService();
-
-    const existingMapping = await mappingService.getMapping(tenantId, salesPrice.id);
-
-    if (!existingMapping) {
-      // No mapping exists - create price in Shopware
-      const priceName = names['en'] || names['de'] || `Price ${salesPrice.id}`;
-      const result = await shopware.createPrice({
-        name: priceName,
-        type: salesPrice.type,
-        isGross: true,
-        plentySalesPriceId: salesPrice.id,
-        translations: names,
-      });
-
-      if (result.success && result.id) {
-        // Store the mapping
-        await mappingService.upsertMappings(tenantId, [
-          {
-            plentySalesPriceId: salesPrice.id,
-            shopwarePriceId: result.id,
-            mappingType: 'AUTO',
-            lastSyncAction: 'create',
+        return this.prisma.plentySalesPrice.upsert({
+          where: {
+            tenantId_id: {
+              tenantId,
+              id: salesPrice.id,
+            },
           },
-        ]);
-      }
-    } else {
-      // Mapping exists - optionally update the price in Shopware
-      const priceName = names['en'] || names['de'] || `Price ${salesPrice.id}`;
-      await shopware.updatePrice(existingMapping.shopwarePriceId, {
-        name: priceName,
-        type: salesPrice.type,
-        isGross: true,
-        translations: names,
-      });
-
-      // Update mapping sync time
-      await mappingService.upsertMappings(tenantId, [
-        {
-          plentySalesPriceId: salesPrice.id,
-          shopwarePriceId: existingMapping.shopwarePriceId,
-          mappingType: existingMapping.mappingType as 'MANUAL' | 'AUTO',
-          lastSyncAction: 'update',
-        },
-      ]);
-    }
+          create: {
+            id: salesPrice.id,
+            tenantId,
+            position: salesPrice.position,
+            minimumOrderQuantity: salesPrice.minimumOrderQuantity,
+            type: salesPrice.type,
+            isCustomerPrice: salesPrice.isCustomerPrice,
+            isDisplayedByDefault: salesPrice.isDisplayedByDefault,
+            isLiveConversion: salesPrice.isLiveConversion,
+            currency,
+            countryIds,
+            customerClassIds,
+            referrerIds,
+            names,
+            rawData: salesPrice as unknown as object,
+            syncedAt: new Date(),
+          },
+          update: {
+            position: salesPrice.position,
+            minimumOrderQuantity: salesPrice.minimumOrderQuantity,
+            type: salesPrice.type,
+            isCustomerPrice: salesPrice.isCustomerPrice,
+            isDisplayedByDefault: salesPrice.isDisplayedByDefault,
+            isLiveConversion: salesPrice.isLiveConversion,
+            currency,
+            countryIds,
+            customerClassIds,
+            referrerIds,
+            names,
+            rawData: salesPrice as unknown as object,
+            syncedAt: new Date(),
+          },
+        });
+      })
+    );
   }
 
   /**
@@ -1274,124 +1237,182 @@ export class ConfigSyncProcessor {
   }
 
   /**
-   * Sync units from Plenty
+   * Sync units from Plenty using bulk operations
    */
   private async syncUnits(
     tenantId: string,
     plenty: PlentyClient,
     shopware: IShopwareClient
   ): Promise<{ synced: number; errors: number }> {
-    let synced = 0;
-    let errors = 0;
+    const log = createJobLogger('', tenantId, 'CONFIG');
 
     try {
       const units = await plenty.getUnits();
 
+      if (units.length === 0) {
+        log.info('No units to sync');
+        return { synced: 0, errors: 0 };
+      }
+
+      log.info('Starting bulk unit sync', { count: units.length });
+
+      // Step 1: Bulk upsert to local cache
+      await this.bulkUpsertUnitsToCache(tenantId, units);
+
+      // Step 2: Get all existing mappings at once
+      const { UnitMappingService } = await import('../services/UnitMappingService');
+      const mappingService = new UnitMappingService();
+      const existingMappings = await mappingService.getBatchMappings(
+        tenantId,
+        units.map((u) => u.id)
+      );
+
+      log.info('Loaded existing mappings', { count: Object.keys(existingMappings).length });
+
+      // Helper to generate UUID
+      const generateUuid = (): string => {
+        return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          const v = c === 'x' ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        });
+      };
+
+      // Locale mapping for translations
+      const localeMap: Record<string, string> = {
+        de: 'de-DE',
+        en: 'en-GB',
+        fr: 'fr-FR',
+        it: 'it-IT',
+        es: 'es-ES',
+        nl: 'nl-NL',
+        pl: 'pl-PL',
+      };
+
+      // Step 3: Prepare bulk payload for Shopware
+      const bulkPayload: Array<{
+        id: string;
+        shortCode: string;
+        name: string;
+        translations: Record<string, { shortCode: string; name: string }>;
+      }> = [];
+
+      const mappingUpdates: Array<{
+        plentyUnitId: number;
+        shopwareUnitId: string;
+        mappingType: 'MANUAL' | 'AUTO';
+        lastSyncAction: 'create' | 'update';
+      }> = [];
+
       for (const unit of units) {
-        try {
-          await this.upsertUnit(tenantId, unit, shopware);
-          synced++;
-        } catch (error) {
-          errors++;
+        // Extract localized names
+        const names: Record<string, string> = {};
+        if (unit.names) {
+          for (const name of unit.names) {
+            names[name.lang] = name.name;
+          }
         }
+
+        // Get unit name (prefer de -> en -> first available)
+        const unitName = names['de'] || names['en'] || Object.values(names)[0] || unit.unitOfMeasurement;
+
+        // Build translations for Shopware
+        const translations: Record<string, { shortCode: string; name: string }> = {};
+        for (const [lang, name] of Object.entries(names)) {
+          const shopwareLang = localeMap[lang] || lang;
+          translations[shopwareLang] = { shortCode: unit.unitOfMeasurement, name };
+        }
+
+        // Get or generate Shopware ID
+        const existingMapping = existingMappings[unit.id];
+        const shopwareId = existingMapping?.shopwareUnitId || generateUuid();
+
+        bulkPayload.push({
+          id: shopwareId,
+          shortCode: unit.unitOfMeasurement,
+          name: unitName,
+          translations,
+        });
+
+        mappingUpdates.push({
+          plentyUnitId: unit.id,
+          shopwareUnitId: shopwareId,
+          mappingType: (existingMapping?.mappingType as 'MANUAL' | 'AUTO') || 'AUTO',
+          lastSyncAction: existingMapping ? 'update' : 'create',
+        });
+      }
+
+      // Step 4: Bulk sync to Shopware
+      log.info('Executing bulk sync to Shopware', { count: bulkPayload.length });
+      const bulkResult = await shopware.bulkSyncUnits(bulkPayload);
+
+      // Step 5: Update mappings based on results
+      if (bulkResult.success) {
+        await mappingService.upsertMappings(tenantId, mappingUpdates);
+        log.info('Bulk unit sync completed successfully', { synced: units.length });
+        return { synced: units.length, errors: 0 };
+      } else {
+        // Count successes and failures from individual results
+        const successCount = bulkResult.results.filter((r) => r.success).length;
+        const errorCount = bulkResult.results.filter((r) => !r.success).length;
+
+        // Only update mappings for successful items
+        const successfulMappings = mappingUpdates.filter((_, index) => bulkResult.results[index]?.success);
+        if (successfulMappings.length > 0) {
+          await mappingService.upsertMappings(tenantId, successfulMappings);
+        }
+
+        log.warn('Bulk unit sync completed with errors', { synced: successCount, errors: errorCount });
+        return { synced: successCount, errors: errorCount };
       }
     } catch (error) {
-      throw new Error(`Failed to fetch units: ${error}`);
+      log.error('Failed to sync units', { error: error instanceof Error ? error.message : String(error) });
+      throw new Error(`Failed to sync units: ${error}`);
     }
-
-    return { synced, errors };
   }
 
   /**
-   * Upsert a single unit
+   * Bulk upsert units to local cache
    */
-  private async upsertUnit(
-    tenantId: string,
-    unit: PlentyUnit,
-    shopware: IShopwareClient
-  ): Promise<void> {
-    // Extract localized names
-    const names: Record<string, string> = {};
-    if (unit.names) {
-      for (const name of unit.names) {
-        names[name.lang] = name.name;
-      }
-    }
+  private async bulkUpsertUnitsToCache(tenantId: string, units: PlentyUnit[]): Promise<void> {
+    await this.prisma.$transaction(
+      units.map((unit) => {
+        // Extract localized names
+        const names: Record<string, string> = {};
+        if (unit.names) {
+          for (const name of unit.names) {
+            names[name.lang] = name.name;
+          }
+        }
 
-    // Save to local cache
-    await this.prisma.plentyUnit.upsert({
-      where: {
-        tenantId_id: {
-          tenantId,
-          id: unit.id,
-        },
-      },
-      create: {
-        id: unit.id,
-        tenantId,
-        position: unit.position,
-        unitOfMeasurement: unit.unitOfMeasurement,
-        isDecimalPlacesAllowed: unit.isDecimalPlacesAllowed,
-        names,
-        rawData: unit as unknown as object,
-        syncedAt: new Date(),
-      },
-      update: {
-        position: unit.position,
-        unitOfMeasurement: unit.unitOfMeasurement,
-        isDecimalPlacesAllowed: unit.isDecimalPlacesAllowed,
-        names,
-        rawData: unit as unknown as object,
-        syncedAt: new Date(),
-      },
-    });
-
-    // Check if mapping exists
-    const { UnitMappingService } = await import('../services/UnitMappingService');
-    const mappingService = new UnitMappingService();
-
-    const existingMapping = await mappingService.getMapping(tenantId, unit.id);
-
-    // Get unit name (prefer de -> en -> first available)
-    const unitName = names['de'] || names['en'] || Object.values(names)[0] || unit.unitOfMeasurement;
-
-    if (!existingMapping) {
-      // No mapping exists - create unit in Shopware
-      const result = await shopware.createUnit({
-        id: '',
-        shortCode: unit.unitOfMeasurement,
-        name: unitName,
-        _plentyUnitId: unit.id,
-      });
-
-      if (result.success && result.id) {
-        // Store the mapping
-        await mappingService.upsertMappings(tenantId, [
-          {
-            plentyUnitId: unit.id,
-            shopwareUnitId: result.id,
-            mappingType: 'AUTO',
-            lastSyncAction: 'create',
+        return this.prisma.plentyUnit.upsert({
+          where: {
+            tenantId_id: {
+              tenantId,
+              id: unit.id,
+            },
           },
-        ]);
-      }
-    } else {
-      // Mapping exists - optionally update the unit in Shopware
-      await shopware.updateUnit(existingMapping.shopwareUnitId, {
-        shortCode: unit.unitOfMeasurement,
-        name: unitName,
-      });
-
-      // Update mapping sync time
-      await mappingService.upsertMappings(tenantId, [
-        {
-          plentyUnitId: unit.id,
-          shopwareUnitId: existingMapping.shopwareUnitId,
-          mappingType: existingMapping.mappingType as 'MANUAL' | 'AUTO',
-          lastSyncAction: 'update',
-        },
-      ]);
-    }
+          create: {
+            id: unit.id,
+            tenantId,
+            position: unit.position,
+            unitOfMeasurement: unit.unitOfMeasurement,
+            isDecimalPlacesAllowed: unit.isDecimalPlacesAllowed,
+            names,
+            rawData: unit as unknown as object,
+            syncedAt: new Date(),
+          },
+          update: {
+            position: unit.position,
+            unitOfMeasurement: unit.unitOfMeasurement,
+            isDecimalPlacesAllowed: unit.isDecimalPlacesAllowed,
+            names,
+            rawData: unit as unknown as object,
+            syncedAt: new Date(),
+          },
+        });
+      })
+    );
   }
 
   /**

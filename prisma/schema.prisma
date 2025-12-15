@@ -50,6 +50,7 @@ model Tenant {
   mockShopwareUnits         MockShopwareUnit[]
   mediaMappings             MediaMapping[]
   mockShopwareMedia         MockShopwareMedia[]
+  configs                   TenantConfig[]
 
   @@index([status])
   @@map("tenants")
@@ -59,6 +60,28 @@ enum TenantStatus {
   ACTIVE
   PAUSED
   SUSPENDED
+}
+
+// ============================================
+// TENANT CONFIGURATION
+// ============================================
+
+model TenantConfig {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  key         String   // e.g., "plentyFrontendUrl", "defaultSalesPriceId", "taxMappings"
+  value       Json     // Flexible: string, number, object, array
+
+  // Metadata
+  description String?  // Optional description for UI/documentation
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("tenant_configs")
 }
 
 // ============================================

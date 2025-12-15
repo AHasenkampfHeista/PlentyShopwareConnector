@@ -33,20 +33,32 @@ Refactor all config sync methods in `ConfigSyncProcessor` to use Shopware's bulk
     - "dropdown" → "select"
     - default → "text"
   - Upload attribute value images for media-type property groups
-  - Image URL constructed from Plenty frontend URL (hardcoded): `https://plentymarkets.heista.de/images/produkte/grp/{imageName}`
-    - TODO: Move frontend URL to tenant configuration
+  - Image URL from TenantConfig (`plentyFrontendUrl`)
 
-## Pending
+- [x] **Sales Prices** - Cache locally only (no Shopware sync)
+  - Sales prices define price types (default, RRP, etc.) - not synced to Shopware
+  - Bulk upsert to local cache (Prisma transaction)
+  - Logs available price types for configuration reference
+  - Price values applied during product sync using `defaultSalesPriceId` and `rrpSalesPriceId` from TenantConfig
 
-- [ ] **Sales Prices** - `syncSalesPrices` / `upsertSalesPrice`
-  - Straightforward bulk sync
+- [x] **TenantConfig** - Added flexible tenant configuration system
+  - New `tenant_configs` table with key-value storage (JSON values)
+  - `TenantConfigService` with type-safe getters
+  - Supports strings, numbers, booleans, mappings, and arrays
+  - Well-known keys: `plentyFrontendUrl`, `defaultSalesPriceId`, `rrpSalesPriceId`, `taxMappings`
+
+- [x] **Units** - Implemented bulk sync
+  - Bulk upsert to local cache (Prisma transaction)
+  - Batch fetch existing mappings
+  - Single bulk API call to Shopware
+  - Bulk mapping updates
   - Handle translations
 
-- [ ] **Units** - `syncUnits` / `upsertUnit`
-  - Straightforward bulk sync
-  - Handle translations
+## All Config Sync Methods Refactored!
 
-## Pattern to Follow
+All config sync methods now use bulk operations for improved performance.
+
+## Pattern Used
 
 Each bulk sync should follow this pattern (see `syncManufacturers` for reference):
 

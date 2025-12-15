@@ -1026,9 +1026,8 @@ export class MockShopwareClient implements IShopwareClient {
             where: { id: price.id },
             data: {
               name: price.name,
-              priority: price.priority ?? 100,
               translations: price.translations as unknown as object,
-              rawShopwareData: price as unknown as object,
+              rawShopwareData: price as unknown as object, // priority stored here
             },
           });
 
@@ -1045,9 +1044,8 @@ export class MockShopwareClient implements IShopwareClient {
               id,
               tenantId: this.tenantId,
               name: price.name,
-              priority: price.priority ?? 100,
               translations: price.translations as unknown as object,
-              rawShopwareData: price as unknown as object,
+              rawShopwareData: price as unknown as object, // priority stored here
             },
           });
 
