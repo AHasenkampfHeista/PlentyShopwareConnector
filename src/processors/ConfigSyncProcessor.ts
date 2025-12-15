@@ -65,16 +65,16 @@ export class ConfigSyncProcessor {
 
       // Sync each config type
       log.info('Syncing categories');
-      //result.categories = await this.syncCategories(jobData.tenantId, plenty);
+      //result.categories = await this.syncCategories(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing attributes');
-      //result.attributes = await this.syncAttributes(jobData.tenantId, plenty);
+      //result.attributes = await this.syncAttributes(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing sales prices');
-      //result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty, shopware);
+      result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing manufacturers');
-      result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty, shopware);
+      //result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing units');
       //result.units = await this.syncUnits(jobData.tenantId, plenty, shopware);
@@ -94,131 +94,71 @@ export class ConfigSyncProcessor {
   }
 
   /**
-   * Sync categories from Plenty
+   * Sync categories from Plenty using bulk operations
+   * Categories are processed level by level to ensure parents exist before children
    */
   private async syncCategories(
     tenantId: string,
     plenty: PlentyClient,
     shopware: IShopwareClient
   ): Promise<{ synced: number; errors: number }> {
-    let synced = 0;
-    let errors = 0;
+    const log = createJobLogger('', tenantId, 'CONFIG');
 
     try {
       const categories = await plenty.getAllCategories();
 
-      // Sort categories by level to ensure parents are created before children
-      const sortedCategories = [...categories].sort((a, b) => (a.level || 0) - (b.level || 0));
-
-      for (const category of sortedCategories) {
-        try {
-          await this.upsertCategory(tenantId, category, shopware);
-          synced++;
-        } catch (error) {
-          const log = createJobLogger('', tenantId, 'CONFIG');
-          log.error('Failed to upsert category', {
-            categoryId: category.id,
-            categoryIdType: typeof category.id,
-            parentCategoryId: category.parentCategoryId,
-            level: category.level,
-            type: category.type,
-            errorMessage: error instanceof Error ? error.message : String(error),
-            errorName: error instanceof Error ? error.name : 'Unknown',
-            stack: error instanceof Error ? error.stack : undefined,
-            fullError: error,
-          });
-          errors++;
-        }
+      if (categories.length === 0) {
+        log.info('No categories to sync');
+        return { synced: 0, errors: 0 };
       }
-    } catch (error) {
-      throw new Error(`Failed to fetch categories: ${error}`);
-    }
 
-    return { synced, errors };
-  }
+      log.info('Starting bulk category sync', { count: categories.length });
 
-  /**
-   * Upsert a single category
-   */
-  private async upsertCategory(
-    tenantId: string,
-    category: PlentyCategory,
-    shopware: IShopwareClient
-  ): Promise<void> {
-    // Extract localized names from details
-    const names: Record<string, string> = {};
-    if (category.details) {
-      for (const detail of category.details) {
-        names[detail.lang] = detail.name;
-      }
-    }
+      // Step 1: Bulk upsert to local cache
+      await this.bulkUpsertCategoriesToCache(tenantId, categories);
 
-    // Convert string Y/N to boolean
-    const linklist = category.linklist === 'Y' || category.linklist === true;
-    const sitemap = category.sitemap === 'Y' || category.sitemap === true;
-
-    const log = createJobLogger('', tenantId, 'CONFIG');
-    log.debug('Upserting category', {
-      categoryId: category.id,
-      categoryIdType: typeof category.id,
-      parentId: category.parentCategoryId,
-      level: category.level,
-      type: category.type,
-      linklist,
-      sitemap,
-      hasChildren: category.hasChildren,
-      namesCount: Object.keys(names).length,
-    });
-
-    // Save to local cache
-    await this.prisma.plentyCategory.upsert({
-      where: {
-        tenantId_id: {
-          tenantId,
-          id: category.id,
-        },
-      },
-      create: {
-        id: category.id,
+      // Step 2: Get all existing mappings at once
+      const { CategoryMappingService } = await import('../services/CategoryMappingService');
+      const mappingService = new CategoryMappingService();
+      const existingMappings = await mappingService.getBatchMappings(
         tenantId,
-        parentId: category.parentCategoryId,
-        level: category.level,
-        type: category.type,
-        linklist,
-        right: category.right,
-        sitemap,
-        hasChildren: category.hasChildren,
-        names,
-        rawData: category as unknown as object,
-        syncedAt: new Date(),
-      },
-      update: {
-        parentId: category.parentCategoryId,
-        level: category.level,
-        type: category.type,
-        linklist,
-        right: category.right,
-        sitemap,
-        hasChildren: category.hasChildren,
-        names,
-        rawData: category as unknown as object,
-        syncedAt: new Date(),
-      },
-    });
+        categories.map((c) => c.id)
+      );
 
-    // Check if mapping exists
-    const { CategoryMappingService } = await import('../services/CategoryMappingService');
-    const mappingService = new CategoryMappingService();
+      // Step 3: Group categories by level for hierarchical processing
+      const categoriesByLevel = new Map<number, PlentyCategory[]>();
+      for (const category of categories) {
+        const level = category.level || 0;
+        if (!categoriesByLevel.has(level)) {
+          categoriesByLevel.set(level, []);
+        }
+        categoriesByLevel.get(level)!.push(category);
+      }
 
-    const existingMapping = await mappingService.getMapping(tenantId, category.id);
+      // Sort levels in ascending order
+      const sortedLevels = Array.from(categoriesByLevel.keys()).sort((a, b) => a - b);
 
-    // Get category name (prefer de -> en -> first available)
-    const categoryName = names['de'] || names['en'] || Object.values(names)[0] || `Category ${category.id}`;
+      log.info('Categories grouped by level', {
+        levels: sortedLevels,
+        countPerLevel: sortedLevels.map((l) => ({ level: l, count: categoriesByLevel.get(l)!.length })),
+      });
 
-    // Build translations for Shopware
-    const translations: Record<string, { name: string }> = {};
-    for (const [lang, name] of Object.entries(names)) {
-      // Map language codes to Shopware locale format
+      // Track all mappings (existing + newly created) for parent ID resolution
+      const allMappings = new Map<number, string>();
+      for (const [plentyId, mapping] of Object.entries(existingMappings)) {
+        allMappings.set(Number(plentyId), mapping.shopwareCategoryId);
+      }
+
+      // Helper to generate UUID
+      const generateUuid = (): string => {
+        return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          const v = c === 'x' ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        });
+      };
+
+      // Locale mapping for translations
       const localeMap: Record<string, string> = {
         de: 'de-DE',
         en: 'en-GB',
@@ -228,169 +168,253 @@ export class ConfigSyncProcessor {
         nl: 'nl-NL',
         pl: 'pl-PL',
       };
-      const shopwareLang = localeMap[lang] || lang;
-      translations[shopwareLang] = { name };
-    }
 
-    // Get parent Shopware category ID if this category has a parent
-    let shopwareParentId: string | undefined;
-    if (category.parentCategoryId) {
-      const parentMapping = await mappingService.getMapping(tenantId, category.parentCategoryId);
-      if (parentMapping) {
-        shopwareParentId = parentMapping.shopwareCategoryId;
-      }
-    }
+      let totalSynced = 0;
+      let totalErrors = 0;
 
-    if (!existingMapping) {
-      // No mapping exists - create category in Shopware
-      const result = await shopware.createCategory({
-        id: '',
-        name: categoryName,
-        parentId: shopwareParentId,
-        active: linklist,
-        visible: linklist,
-        level: category.level,
-        translations,
-        _plentyCategoryId: category.id,
-      });
+      // Step 4: Process each level in order
+      for (const level of sortedLevels) {
+        const levelCategories = categoriesByLevel.get(level)!;
+        log.info('Processing category level', { level, count: levelCategories.length });
 
-      if (result.success && result.id) {
-        // Store the mapping
-        await mappingService.upsertMappings(tenantId, [
-          {
+        // Prepare bulk payload for this level
+        const bulkPayload: Array<{
+          id: string;
+          name: string;
+          parentId?: string;
+          active: boolean;
+          visible: boolean;
+          translations: Record<string, { name: string }>;
+        }> = [];
+
+        const mappingUpdates: Array<{
+          plentyCategoryId: number;
+          shopwareCategoryId: string;
+          mappingType: 'MANUAL' | 'AUTO';
+          lastSyncAction: 'create' | 'update';
+        }> = [];
+
+        for (const category of levelCategories) {
+          // Extract localized names from details
+          const names: Record<string, string> = {};
+          if (category.details) {
+            for (const detail of category.details) {
+              names[detail.lang] = detail.name;
+            }
+          }
+
+          // Convert string Y/N to boolean
+          const linklist = category.linklist === 'Y' || category.linklist === true;
+
+          // Get category name (prefer de -> en -> first available)
+          const categoryName = names['de'] || names['en'] || Object.values(names)[0] || `Category ${category.id}`;
+
+          // Build translations for Shopware
+          const translations: Record<string, { name: string }> = {};
+          for (const [lang, name] of Object.entries(names)) {
+            const shopwareLang = localeMap[lang] || lang;
+            translations[shopwareLang] = { name };
+          }
+
+          // Resolve parent Shopware ID from our tracking map
+          let shopwareParentId: string | undefined;
+          if (category.parentCategoryId) {
+            shopwareParentId = allMappings.get(category.parentCategoryId);
+            if (!shopwareParentId) {
+              log.warn('Parent category not found in mappings', {
+                categoryId: category.id,
+                parentCategoryId: category.parentCategoryId,
+              });
+            }
+          }
+
+          // Get or generate Shopware ID
+          const existingMapping = existingMappings[category.id];
+          const shopwareId = existingMapping?.shopwareCategoryId || generateUuid();
+
+          // Track this mapping for child categories
+          allMappings.set(category.id, shopwareId);
+
+          bulkPayload.push({
+            id: shopwareId,
+            name: categoryName,
+            ...(shopwareParentId && { parentId: shopwareParentId }),
+            active: linklist,
+            visible: linklist,
+            translations,
+          });
+
+          mappingUpdates.push({
             plentyCategoryId: category.id,
-            shopwareCategoryId: result.id,
-            mappingType: 'AUTO',
-            lastSyncAction: 'create',
-          },
-        ]);
-      }
-    } else {
-      // Mapping exists - update the category in Shopware
-      await shopware.updateCategory(existingMapping.shopwareCategoryId, {
-        name: categoryName,
-        parentId: shopwareParentId,
-        active: linklist,
-        visible: linklist,
-        translations,
-      });
+            shopwareCategoryId: shopwareId,
+            mappingType: (existingMapping?.mappingType as 'MANUAL' | 'AUTO') || 'AUTO',
+            lastSyncAction: existingMapping ? 'update' : 'create',
+          });
+        }
 
-      // Update mapping sync time
-      await mappingService.upsertMappings(tenantId, [
-        {
-          plentyCategoryId: category.id,
-          shopwareCategoryId: existingMapping.shopwareCategoryId,
-          mappingType: existingMapping.mappingType as 'MANUAL' | 'AUTO',
-          lastSyncAction: 'update',
-        },
-      ]);
+        // Step 5: Bulk sync this level to Shopware
+        if (bulkPayload.length > 0) {
+          log.info('Executing bulk sync for level', { level, count: bulkPayload.length });
+
+          const bulkResult = await shopware.bulkSyncCategories(
+            bulkPayload.map((p) => ({
+              id: p.id,
+              name: p.name,
+              parentId: p.parentId,
+              active: p.active,
+              visible: p.visible,
+              translations: p.translations,
+            }))
+          );
+
+          // Step 6: Update mappings based on results
+          if (bulkResult.success) {
+            await mappingService.upsertMappings(tenantId, mappingUpdates);
+            totalSynced += levelCategories.length;
+            log.info('Level sync completed successfully', { level, synced: levelCategories.length });
+          } else {
+            // Count successes and failures
+            const successCount = bulkResult.results.filter((r) => r.success).length;
+            const errorCount = bulkResult.results.filter((r) => !r.success).length;
+
+            // Only update mappings for successful items
+            const successfulMappings = mappingUpdates.filter((_, index) => bulkResult.results[index]?.success);
+            if (successfulMappings.length > 0) {
+              await mappingService.upsertMappings(tenantId, successfulMappings);
+            }
+
+            totalSynced += successCount;
+            totalErrors += errorCount;
+            log.warn('Level sync completed with errors', { level, synced: successCount, errors: errorCount });
+          }
+        }
+      }
+
+      log.info('Bulk category sync completed', { synced: totalSynced, errors: totalErrors });
+      return { synced: totalSynced, errors: totalErrors };
+    } catch (error) {
+      log.error('Failed to sync categories', { error: error instanceof Error ? error.message : String(error) });
+      throw new Error(`Failed to sync categories: ${error}`);
     }
   }
 
   /**
-   * Sync attributes from Plenty
+   * Bulk upsert categories to local cache
+   */
+  private async bulkUpsertCategoriesToCache(tenantId: string, categories: PlentyCategory[]): Promise<void> {
+    // Use transaction for bulk upsert
+    await this.prisma.$transaction(
+      categories.map((category) => {
+        // Extract localized names from details
+        const names: Record<string, string> = {};
+        if (category.details) {
+          for (const detail of category.details) {
+            names[detail.lang] = detail.name;
+          }
+        }
+
+        // Convert string Y/N to boolean
+        const linklist = category.linklist === 'Y' || category.linklist === true;
+        const sitemap = category.sitemap === 'Y' || category.sitemap === true;
+
+        return this.prisma.plentyCategory.upsert({
+          where: {
+            tenantId_id: {
+              tenantId,
+              id: category.id,
+            },
+          },
+          create: {
+            id: category.id,
+            tenantId,
+            parentId: category.parentCategoryId,
+            level: category.level,
+            type: category.type,
+            linklist,
+            right: category.right,
+            sitemap,
+            hasChildren: category.hasChildren,
+            names,
+            rawData: category as unknown as object,
+            syncedAt: new Date(),
+          },
+          update: {
+            parentId: category.parentCategoryId,
+            level: category.level,
+            type: category.type,
+            linklist,
+            right: category.right,
+            sitemap,
+            hasChildren: category.hasChildren,
+            names,
+            rawData: category as unknown as object,
+            syncedAt: new Date(),
+          },
+        });
+      })
+    );
+  }
+
+  /**
+   * Sync attributes from Plenty using bulk operations
+   * Two-phase sync: first property groups, then property options
+   * Handles display type mapping and image uploads for media-type attributes
    */
   private async syncAttributes(
     tenantId: string,
     plenty: PlentyClient,
     shopware: IShopwareClient
   ): Promise<{ synced: number; errors: number }> {
-    let synced = 0;
-    let errors = 0;
+    const log = createJobLogger('', tenantId, 'CONFIG');
 
     try {
       const attributes = await plenty.getAllAttributes();
 
+      if (attributes.length === 0) {
+        log.info('No attributes to sync');
+        return { synced: 0, errors: 0 };
+      }
+
+      log.info('Starting bulk attribute sync', { count: attributes.length });
+
+      // Step 1: Bulk upsert all attributes to local cache
+      await this.bulkUpsertAttributesToCache(tenantId, attributes);
+
+      // Step 2: Get all existing mappings at once
+      const { AttributeMappingService } = await import('../services/AttributeMappingService');
+      const mappingService = new AttributeMappingService();
+
+      const existingAttributeMappings = await mappingService.getBatchAttributeMappings(
+        tenantId,
+        attributes.map((a) => a.id)
+      );
+
+      // Collect all attribute value IDs for batch lookup
+      const allValueIds: number[] = [];
       for (const attribute of attributes) {
-        try {
-          await this.upsertAttribute(tenantId, attribute, shopware);
-          synced++;
-        } catch (error) {
-          const log = createJobLogger('', tenantId, 'CONFIG');
-          log.error('Failed to upsert attribute', {
-            attributeId: attribute.id,
-            backendName: attribute.backendName,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          errors++;
+        const values = attribute.values || attribute.attributeValues || [];
+        for (const value of values) {
+          allValueIds.push(value.id);
         }
       }
-    } catch (error) {
-      throw new Error(`Failed to fetch attributes: ${error}`);
-    }
 
-    return { synced, errors };
-  }
+      const existingValueMappings = await mappingService.getBatchAttributeValueMappings(tenantId, allValueIds);
 
-  /**
-   * Upsert a single attribute (property group) and its values (property options)
-   */
-  private async upsertAttribute(
-    tenantId: string,
-    attribute: PlentyAttribute,
-    shopware: IShopwareClient
-  ): Promise<void> {
-    // Extract localized names for the attribute
-    const names: Record<string, string> = {};
-    if (attribute.attributeNames) {
-      for (const name of attribute.attributeNames) {
-        names[name.lang] = name.name;
-      }
-    }
+      log.info('Loaded existing mappings', {
+        attributeMappings: Object.keys(existingAttributeMappings).length,
+        valueMappings: Object.keys(existingValueMappings).length,
+      });
 
-    // Save to local cache
-    await this.prisma.plentyAttribute.upsert({
-      where: {
-        tenantId_id: {
-          tenantId,
-          id: attribute.id,
-        },
-      },
-      create: {
-        id: attribute.id,
-        tenantId,
-        backendName: attribute.backendName,
-        position: attribute.position,
-        isSurchargePercental: attribute.isSurchargePercental,
-        isLinkableToImage: attribute.isLinkableToImage,
-        amazonAttribute: attribute.amazonAttribute,
-        fruugoAttribute: attribute.fruugoAttribute,
-        pixmaniaAttribute: attribute.pixmaniaAttribute,
-        googleShoppingAttribute: attribute.googleShoppingAttribute,
-        attributeValues: (attribute.values || attribute.attributeValues) as unknown as object,
-        names,
-        rawData: attribute as unknown as object,
-        syncedAt: new Date(),
-      },
-      update: {
-        backendName: attribute.backendName,
-        position: attribute.position,
-        isSurchargePercental: attribute.isSurchargePercental,
-        isLinkableToImage: attribute.isLinkableToImage,
-        amazonAttribute: attribute.amazonAttribute,
-        fruugoAttribute: attribute.fruugoAttribute,
-        pixmaniaAttribute: attribute.pixmaniaAttribute,
-        googleShoppingAttribute: attribute.googleShoppingAttribute,
-        attributeValues: (attribute.values || attribute.attributeValues) as unknown as object,
-        names,
-        rawData: attribute as unknown as object,
-        syncedAt: new Date(),
-      },
-    });
+      // Helper to generate UUID
+      const generateUuid = (): string => {
+        return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          const v = c === 'x' ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        });
+      };
 
-    // Import mapping service
-    const { AttributeMappingService } = await import('../services/AttributeMappingService');
-    const mappingService = new AttributeMappingService();
-
-    // Check if attribute mapping exists
-    const existingMapping = await mappingService.getAttributeMapping(tenantId, attribute.id);
-
-    // Get attribute name (prefer de -> en -> backendName)
-    const attributeName = names['de'] || names['en'] || Object.values(names)[0] || attribute.backendName;
-
-    // Build translations for Shopware
-    const translations: Record<string, { name: string }> = {};
-    for (const [lang, name] of Object.entries(names)) {
+      // Locale mapping for translations
       const localeMap: Record<string, string> = {
         de: 'de-DE',
         en: 'en-GB',
@@ -400,159 +424,342 @@ export class ConfigSyncProcessor {
         nl: 'nl-NL',
         pl: 'pl-PL',
       };
-      const shopwareLang = localeMap[lang] || lang;
-      translations[shopwareLang] = { name };
-    }
 
-    let shopwarePropertyGroupId: string;
+      // Map Plenty typeOfSelectionInOnlineStore to Shopware displayType
+      const mapDisplayType = (plentyType: string): string => {
+        switch (plentyType?.toLowerCase()) {
+          case 'image':
+            return 'media';
+          case 'dropdown':
+            return 'select';
+          default:
+            return 'text';
+        }
+      };
 
-    if (!existingMapping) {
-      // No mapping exists - create property group in Shopware
-      const result = await shopware.createPropertyGroup({
-        id: '',
-        name: attributeName,
-        displayType: 'text',
-        sortingType: 'alphanumeric',
-        position: attribute.position,
-        translations,
-        _plentyAttributeId: attribute.id,
-      });
+      // Step 3: Prepare bulk payload for property groups
+      const propertyGroupPayload: Array<{
+        id: string;
+        name: string;
+        displayType: string;
+        sortingType: string;
+        position: number;
+        translations: Record<string, { name: string }>;
+      }> = [];
 
-      if (result.success && result.id) {
-        shopwarePropertyGroupId = result.id;
-        // Store the mapping
-        await mappingService.upsertAttributeMappings(tenantId, [
-          {
-            plentyAttributeId: attribute.id,
-            shopwarePropertyGroupId: result.id,
-            mappingType: 'AUTO',
-            lastSyncAction: 'create',
-          },
-        ]);
-      } else {
-        throw new Error(`Failed to create property group for attribute ${attribute.id}`);
-      }
-    } else {
-      shopwarePropertyGroupId = existingMapping.shopwarePropertyGroupId;
-      // Mapping exists - update the property group in Shopware
-      await shopware.updatePropertyGroup(existingMapping.shopwarePropertyGroupId, {
-        name: attributeName,
-        position: attribute.position,
-        translations,
-      });
+      const attributeMappingUpdates: Array<{
+        plentyAttributeId: number;
+        shopwarePropertyGroupId: string;
+        mappingType: 'MANUAL' | 'AUTO';
+        lastSyncAction: 'create' | 'update';
+      }> = [];
 
-      // Update mapping sync time
-      await mappingService.upsertAttributeMappings(tenantId, [
-        {
+      // Track generated Shopware IDs and display types for property options
+      const attributeToShopwareGroupId = new Map<number, string>();
+      const attributeDisplayTypes = new Map<number, string>();
+
+      for (const attribute of attributes) {
+        // Extract localized names
+        const names: Record<string, string> = {};
+        if (attribute.attributeNames) {
+          for (const name of attribute.attributeNames) {
+            names[name.lang] = name.name;
+          }
+        }
+
+        const attributeName = names['de'] || names['en'] || Object.values(names)[0] || attribute.backendName;
+
+        // Build translations
+        const translations: Record<string, { name: string }> = {};
+        for (const [lang, name] of Object.entries(names)) {
+          const shopwareLang = localeMap[lang] || lang;
+          translations[shopwareLang] = { name };
+        }
+
+        // Get or generate Shopware ID
+        const existingMapping = existingAttributeMappings[attribute.id];
+        const shopwareId = existingMapping?.shopwarePropertyGroupId || generateUuid();
+
+        // Map display type from Plenty to Shopware
+        const displayType = mapDisplayType(attribute.typeOfSelectionInOnlineStore);
+
+        // Track for later use by property options
+        attributeToShopwareGroupId.set(attribute.id, shopwareId);
+        attributeDisplayTypes.set(attribute.id, displayType);
+
+        log.debug('Mapping attribute display type', {
+          attributeId: attribute.id,
+          plentyType: attribute.typeOfSelectionInOnlineStore,
+          shopwareDisplayType: displayType,
+        });
+
+        propertyGroupPayload.push({
+          id: shopwareId,
+          name: attributeName,
+          displayType,
+          sortingType: 'alphanumeric',
+          position: attribute.position,
+          translations,
+        });
+
+        attributeMappingUpdates.push({
           plentyAttributeId: attribute.id,
-          shopwarePropertyGroupId: existingMapping.shopwarePropertyGroupId,
-          mappingType: existingMapping.mappingType as 'MANUAL' | 'AUTO',
-          lastSyncAction: 'update',
-        },
-      ]);
-    }
+          shopwarePropertyGroupId: shopwareId,
+          mappingType: (existingMapping?.mappingType as 'MANUAL' | 'AUTO') || 'AUTO',
+          lastSyncAction: existingMapping ? 'update' : 'create',
+        });
+      }
 
-    // Now sync attribute values (property options)
-    const attributeValues = attribute.values || attribute.attributeValues || [];
+      // Step 4: Bulk sync property groups to Shopware
+      log.info('Executing bulk sync for property groups', { count: propertyGroupPayload.length });
+      const groupResult = await shopware.bulkSyncPropertyGroups(propertyGroupPayload);
 
-    for (const value of attributeValues) {
-      await this.upsertAttributeValue(
-        tenantId,
-        attribute.id,
-        shopwarePropertyGroupId,
-        value,
-        shopware,
-        mappingService
-      );
+      let totalSynced = 0;
+      let totalErrors = 0;
+
+      if (groupResult.success) {
+        await mappingService.upsertAttributeMappings(tenantId, attributeMappingUpdates);
+        totalSynced += attributes.length;
+        log.info('Property groups synced successfully', { count: attributes.length });
+      } else {
+        const successCount = groupResult.results.filter((r) => r.success).length;
+        const errorCount = groupResult.results.filter((r) => !r.success).length;
+
+        const successfulMappings = attributeMappingUpdates.filter((_, index) => groupResult.results[index]?.success);
+        if (successfulMappings.length > 0) {
+          await mappingService.upsertAttributeMappings(tenantId, successfulMappings);
+        }
+
+        totalSynced += successCount;
+        totalErrors += errorCount;
+        log.warn('Property groups sync completed with errors', { synced: successCount, errors: errorCount });
+      }
+
+      // Step 5: Upload images for media-type attribute values
+      const { MediaService } = await import('../services/MediaService');
+      const mediaService = new MediaService();
+      const valueMediaIds = new Map<number, string>(); // valueId -> mediaId
+
+      // Plenty frontend URL for images (different from API URL)
+      // TODO: Move this to tenant configuration
+      const plentyFrontendUrl = 'https://plentymarkets.heista.de';
+
+      for (const attribute of attributes) {
+        const displayType = attributeDisplayTypes.get(attribute.id);
+        if (displayType !== 'media') continue;
+
+        const values = attribute.values || attribute.attributeValues || [];
+        for (const value of values) {
+          if (!value.image) continue;
+
+          // Construct full image URL from Plenty frontend
+          const imageUrl = `${plentyFrontendUrl}/images/produkte/grp/${value.image}`;
+
+          log.debug('Uploading attribute value image', {
+            attributeId: attribute.id,
+            valueId: value.id,
+            imageName: value.image,
+            imageUrl,
+          });
+
+          const uploadResult = await mediaService.uploadFromUrl(tenantId, shopware, {
+            sourceUrl: imageUrl,
+            sourceType: 'PROPERTY_OPTION_IMAGE',
+            sourceEntityId: `${attribute.id}_${value.id}`,
+            folderName: 'Attribute Images',
+            fileName: `attr_${attribute.id}_val_${value.id}_${value.image}`,
+            title: `${attribute.backendName} - ${value.backendName}`,
+            alt: value.backendName,
+          });
+
+          if (uploadResult.success && uploadResult.shopwareMediaId) {
+            valueMediaIds.set(value.id, uploadResult.shopwareMediaId);
+            log.debug('Attribute value image uploaded', {
+              valueId: value.id,
+              mediaId: uploadResult.shopwareMediaId,
+            });
+          } else {
+            log.warn('Failed to upload attribute value image', {
+              attributeId: attribute.id,
+              valueId: value.id,
+              imageName: value.image,
+              imageUrl,
+              error: uploadResult.error || 'Unknown error',
+            });
+          }
+        }
+      }
+
+      log.info('Attribute value image uploads completed', { uploadedCount: valueMediaIds.size });
+
+      // Step 6: Prepare bulk payload for property options
+      const propertyOptionPayload: Array<{
+        id: string;
+        groupId: string;
+        name: string;
+        position: number;
+        mediaId?: string;
+        translations: Record<string, { name: string }>;
+      }> = [];
+
+      const valueMappingUpdates: Array<{
+        plentyAttributeId: number;
+        plentyAttributeValueId: number;
+        shopwarePropertyGroupId: string;
+        shopwarePropertyOptionId: string;
+        mappingType: 'MANUAL' | 'AUTO';
+        lastSyncAction: 'create' | 'update';
+      }> = [];
+
+      for (const attribute of attributes) {
+        const shopwareGroupId = attributeToShopwareGroupId.get(attribute.id);
+        if (!shopwareGroupId) continue;
+
+        const values = attribute.values || attribute.attributeValues || [];
+
+        for (const value of values) {
+          // Extract localized names
+          const valueNames: Record<string, string> = {};
+          if (value.valueNames) {
+            for (const name of value.valueNames) {
+              valueNames[name.lang] = name.name;
+            }
+          }
+
+          const valueName = valueNames['de'] || valueNames['en'] || Object.values(valueNames)[0] || value.backendName;
+
+          // Build translations
+          const translations: Record<string, { name: string }> = {};
+          for (const [lang, name] of Object.entries(valueNames)) {
+            const shopwareLang = localeMap[lang] || lang;
+            translations[shopwareLang] = { name };
+          }
+
+          // Get or generate Shopware ID
+          const existingValueMapping = existingValueMappings[value.id];
+          const shopwareOptionId = existingValueMapping?.shopwarePropertyOptionId || generateUuid();
+
+          // Get media ID if image was uploaded for this value
+          const mediaId = valueMediaIds.get(value.id);
+
+          log.debug('Preparing property option', {
+            attributeId: attribute.id,
+            valueId: value.id,
+            valueName,
+            position: value.position,
+            positionType: typeof value.position,
+          });
+
+          propertyOptionPayload.push({
+            id: shopwareOptionId,
+            groupId: shopwareGroupId,
+            name: valueName,
+            position: value.position ?? 0,
+            ...(mediaId && { mediaId }),
+            translations,
+          });
+
+          valueMappingUpdates.push({
+            plentyAttributeId: attribute.id,
+            plentyAttributeValueId: value.id,
+            shopwarePropertyGroupId: shopwareGroupId,
+            shopwarePropertyOptionId: shopwareOptionId,
+            mappingType: (existingValueMapping?.mappingType as 'MANUAL' | 'AUTO') || 'AUTO',
+            lastSyncAction: existingValueMapping ? 'update' : 'create',
+          });
+        }
+      }
+
+      // Step 7: Bulk sync property options to Shopware
+      if (propertyOptionPayload.length > 0) {
+        log.info('Executing bulk sync for property options', { count: propertyOptionPayload.length });
+
+        // Log sample of the payload to verify positions
+        const sampleOptions = propertyOptionPayload.slice(0, 10);
+        const sampleStr = sampleOptions.map((o) => `${o.name}:${o.position}`).join(', ');
+        log.info(`Sample property options (first 10): ${sampleStr}`);
+
+        const optionResult = await shopware.bulkSyncPropertyOptions(propertyOptionPayload);
+
+        if (optionResult.success) {
+          await mappingService.upsertAttributeValueMappings(tenantId, valueMappingUpdates);
+          log.info('Property options synced successfully', { count: propertyOptionPayload.length });
+        } else {
+          const successCount = optionResult.results.filter((r) => r.success).length;
+          const errorCount = optionResult.results.filter((r) => !r.success).length;
+
+          const successfulMappings = valueMappingUpdates.filter((_, index) => optionResult.results[index]?.success);
+          if (successfulMappings.length > 0) {
+            await mappingService.upsertAttributeValueMappings(tenantId, successfulMappings);
+          }
+
+          totalErrors += errorCount;
+          log.warn('Property options sync completed with errors', { synced: successCount, errors: errorCount });
+        }
+      }
+
+      log.info('Bulk attribute sync completed', { synced: totalSynced, errors: totalErrors });
+      return { synced: totalSynced, errors: totalErrors };
+    } catch (error) {
+      log.error('Failed to sync attributes', { error: error instanceof Error ? error.message : String(error) });
+      throw new Error(`Failed to sync attributes: ${error}`);
     }
   }
 
   /**
-   * Upsert a single attribute value (property option)
+   * Bulk upsert attributes to local cache
    */
-  private async upsertAttributeValue(
-    tenantId: string,
-    plentyAttributeId: number,
-    shopwarePropertyGroupId: string,
-    value: { id: number; backendName: string; position: number; valueNames?: { lang: string; name: string }[] },
-    shopware: IShopwareClient,
-    mappingService: InstanceType<typeof import('../services/AttributeMappingService').AttributeMappingService>
-  ): Promise<void> {
-    // Extract localized names for the value
-    const valueNames: Record<string, string> = {};
-    if (value.valueNames) {
-      for (const name of value.valueNames) {
-        valueNames[name.lang] = name.name;
-      }
-    }
+  private async bulkUpsertAttributesToCache(tenantId: string, attributes: PlentyAttribute[]): Promise<void> {
+    await this.prisma.$transaction(
+      attributes.map((attribute) => {
+        // Extract localized names
+        const names: Record<string, string> = {};
+        if (attribute.attributeNames) {
+          for (const name of attribute.attributeNames) {
+            names[name.lang] = name.name;
+          }
+        }
 
-    // Get value name (prefer de -> en -> backendName)
-    const valueName = valueNames['de'] || valueNames['en'] || Object.values(valueNames)[0] || value.backendName;
-
-    // Build translations for Shopware
-    const translations: Record<string, { name: string }> = {};
-    for (const [lang, name] of Object.entries(valueNames)) {
-      const localeMap: Record<string, string> = {
-        de: 'de-DE',
-        en: 'en-GB',
-        fr: 'fr-FR',
-        it: 'it-IT',
-        es: 'es-ES',
-        nl: 'nl-NL',
-        pl: 'pl-PL',
-      };
-      const shopwareLang = localeMap[lang] || lang;
-      translations[shopwareLang] = { name };
-    }
-
-    // Check if value mapping exists
-    const existingValueMapping = await mappingService.getAttributeValueMapping(tenantId, value.id);
-
-    if (!existingValueMapping) {
-      // No mapping exists - create property option in Shopware
-      const result = await shopware.createPropertyOption({
-        id: '',
-        groupId: shopwarePropertyGroupId,
-        name: valueName,
-        position: value.position,
-        translations,
-        _plentyAttributeId: plentyAttributeId,
-        _plentyAttributeValueId: value.id,
-      });
-
-      if (result.success && result.id) {
-        // Store the mapping
-        await mappingService.upsertAttributeValueMappings(tenantId, [
-          {
-            plentyAttributeId,
-            plentyAttributeValueId: value.id,
-            shopwarePropertyGroupId,
-            shopwarePropertyOptionId: result.id,
-            mappingType: 'AUTO',
-            lastSyncAction: 'create',
+        return this.prisma.plentyAttribute.upsert({
+          where: {
+            tenantId_id: {
+              tenantId,
+              id: attribute.id,
+            },
           },
-        ]);
-      }
-    } else {
-      // Mapping exists - update the property option in Shopware
-      await shopware.updatePropertyOption(existingValueMapping.shopwarePropertyOptionId, {
-        name: valueName,
-        position: value.position,
-        translations,
-      });
-
-      // Update mapping sync time
-      await mappingService.upsertAttributeValueMappings(tenantId, [
-        {
-          plentyAttributeId,
-          plentyAttributeValueId: value.id,
-          shopwarePropertyGroupId: existingValueMapping.shopwarePropertyGroupId,
-          shopwarePropertyOptionId: existingValueMapping.shopwarePropertyOptionId,
-          mappingType: existingValueMapping.mappingType as 'MANUAL' | 'AUTO',
-          lastSyncAction: 'update',
-        },
-      ]);
-    }
+          create: {
+            id: attribute.id,
+            tenantId,
+            backendName: attribute.backendName,
+            position: attribute.position,
+            isSurchargePercental: attribute.isSurchargePercental,
+            isLinkableToImage: attribute.isLinkableToImage,
+            amazonAttribute: attribute.amazonAttribute,
+            fruugoAttribute: attribute.fruugoAttribute,
+            pixmaniaAttribute: attribute.pixmaniaAttribute,
+            googleShoppingAttribute: attribute.googleShoppingAttribute,
+            attributeValues: (attribute.values || attribute.attributeValues) as unknown as object,
+            names,
+            rawData: attribute as unknown as object,
+            syncedAt: new Date(),
+          },
+          update: {
+            backendName: attribute.backendName,
+            position: attribute.position,
+            isSurchargePercental: attribute.isSurchargePercental,
+            isLinkableToImage: attribute.isLinkableToImage,
+            amazonAttribute: attribute.amazonAttribute,
+            fruugoAttribute: attribute.fruugoAttribute,
+            pixmaniaAttribute: attribute.pixmaniaAttribute,
+            googleShoppingAttribute: attribute.googleShoppingAttribute,
+            attributeValues: (attribute.values || attribute.attributeValues) as unknown as object,
+            names,
+            rawData: attribute as unknown as object,
+            syncedAt: new Date(),
+          },
+        });
+      })
+    );
   }
 
   /**

@@ -595,6 +595,13 @@ export class PlentyClient {
   }
 
   /**
+   * Get the base URL of the Plenty API
+   */
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  /**
    * Get current auth status
    */
   isAuthenticated(): boolean {

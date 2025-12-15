@@ -1004,6 +1004,80 @@ export class MockShopwareClient implements IShopwareClient {
   }
 
   /**
+   * Bulk sync prices (create or update in batch)
+   */
+  async bulkSyncPrices(
+    prices: Array<{
+      id: string;
+      name: string;
+      priority?: number;
+      translations?: Record<string, { name: string }>;
+    }>
+  ): Promise<ShopwareBulkSyncResult> {
+    this.log.info('Mock Shopware: Bulk syncing prices', { count: prices.length });
+
+    const results: ShopwareBulkItemResult[] = [];
+
+    for (const price of prices) {
+      try {
+        // Upsert pattern: if ID provided and exists, update; otherwise create
+        if (price.id && (await this.priceExists(price.id))) {
+          await this.prisma.mockShopwarePrice.update({
+            where: { id: price.id },
+            data: {
+              name: price.name,
+              priority: price.priority ?? 100,
+              translations: price.translations as unknown as object,
+              rawShopwareData: price as unknown as object,
+            },
+          });
+
+          results.push({
+            productNumber: '',
+            shopwareId: price.id,
+            action: 'update',
+            success: true,
+          });
+        } else {
+          const id = price.id || crypto.randomUUID();
+          await this.prisma.mockShopwarePrice.create({
+            data: {
+              id,
+              tenantId: this.tenantId,
+              name: price.name,
+              priority: price.priority ?? 100,
+              translations: price.translations as unknown as object,
+              rawShopwareData: price as unknown as object,
+            },
+          });
+
+          results.push({
+            productNumber: '',
+            shopwareId: id,
+            action: 'create',
+            success: true,
+          });
+        }
+      } catch (error) {
+        results.push({
+          productNumber: '',
+          shopwareId: price.id || '',
+          action: 'create',
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const failedCount = results.filter((r) => !r.success).length;
+
+    return {
+      success: failedCount === 0,
+      results,
+    };
+  }
+
+  /**
    * Create a new manufacturer
    */
   async createManufacturer(manufacturer: ShopwareManufacturer): Promise<ShopwareSyncResult> {

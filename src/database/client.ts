@@ -28,9 +28,9 @@ export function getPrismaClient(): PrismaClient {
 
     // Log queries in debug mode
     if (process.env.LOG_LEVEL === 'debug') {
-      prisma.$on('query' as never, (e: { query: string; duration: number }) => {
-        logger.debug('Prisma query', { query: e.query, duration: e.duration });
-      });
+      //prisma.$on('query' as never, (e: { query: string; duration: number }) => {
+      //  logger.debug('Prisma query', { query: e.query, duration: e.duration });
+      //});
     }
   }
 

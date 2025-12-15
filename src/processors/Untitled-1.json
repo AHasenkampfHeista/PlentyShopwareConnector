@@ -1,0 +1,92 @@
+{
+    "id": 7,
+    "values": [
+        {
+            "id": 62,
+            "image": "attr_62.jpeg",
+            "comment": "",
+            "position": 1,
+            "ottoValue": "",
+            "updatedAt": "2015-04-28T16:22:45+02:00",
+            "valueNames": [
+                {
+                    "lang": "de",
+                    "name": "motiv1",
+                    "valueId": "62"
+                }
+            ],
+            "amazonValue": "",
+            "attributeId": 7,
+            "backendName": "motiv1",
+            "laRedouteValue": "",
+            "tracdelightValue": "",
+            "neckermannAtEpValue": "",
+            "percentageDistribution": 0
+        },
+        {
+            "id": 63,
+            "image": "attr_63.jpeg",
+            "comment": "",
+            "position": 2,
+            "ottoValue": "",
+            "updatedAt": "2015-04-28T16:22:46+02:00",
+            "valueNames": [
+                {
+                    "lang": "de",
+                    "name": "motiv2",
+                    "valueId": "63"
+                }
+            ],
+            "amazonValue": "",
+            "attributeId": 7,
+            "backendName": "motiv2",
+            "laRedouteValue": "",
+            "tracdelightValue": "",
+            "neckermannAtEpValue": "",
+            "percentageDistribution": 0
+        },
+        {
+            "id": 64,
+            "image": "attr_64.jpeg",
+            "comment": "",
+            "position": 3,
+            "ottoValue": "",
+            "updatedAt": "2015-04-28T16:22:46+02:00",
+            "valueNames": [
+                {
+                    "lang": "de",
+                    "name": "motiv3",
+                    "valueId": "64"
+                }
+            ],
+            "amazonValue": "",
+            "attributeId": 7,
+            "backendName": "motiv3",
+            "laRedouteValue": "",
+            "tracdelightValue": "",
+            "neckermannAtEpValue": "",
+            "percentageDistribution": 0
+        }
+    ],
+    "position": 0,
+    "updatedAt": "2015-04-28T17:28:32+02:00",
+    "backendName": "Motiv",
+    "isGroupable": false,
+    "ottoAttribute": "",
+    "attributeNames": [
+        {
+            "lang": "de",
+            "name": "Motiv",
+            "attributeId": "7"
+        }
+    ],
+    "amazonAttribute": "",
+    "fruugoAttribute": "",
+    "isLinkableToImage": true,
+    "pixmaniaAttribute": 0,
+    "laRedouteAttribute": 0,
+    "isSurchargePercental": false,
+    "googleShoppingAttribute": "",
+    "neckermannAtEpAttribute": 0,
+    "typeOfSelectionInOnlineStore": "image"
+}

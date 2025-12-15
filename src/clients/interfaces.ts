@@ -172,6 +172,18 @@ export interface IShopwareClient {
   priceExists(id: string): Promise<boolean>;
 
   /**
+   * Bulk sync prices (create or update in batch)
+   */
+  bulkSyncPrices(
+    prices: Array<{
+      id: string;
+      name: string;
+      priority?: number;
+      translations?: Record<string, { name: string }>;
+    }>
+  ): Promise<ShopwareBulkSyncResult>;
+
+  /**
    * Create a new manufacturer
    */
   createManufacturer(manufacturer: ShopwareManufacturer): Promise<ShopwareSyncResult>;

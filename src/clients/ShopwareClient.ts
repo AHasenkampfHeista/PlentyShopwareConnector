@@ -264,14 +264,38 @@ export class ShopwareClient implements IShopwareClient {
       this.log.info('Creating media from URL', { sourceUrl: params.sourceUrl, fileName: params.fileName });
 
       // First, download the file to get metadata
-      const imageResponse = await axios.get(params.sourceUrl, {
-        responseType: 'arraybuffer',
-        timeout: 30000,
-      });
+      let imageResponse;
+      try {
+        imageResponse = await axios.get(params.sourceUrl, {
+          responseType: 'arraybuffer',
+          timeout: 30000,
+        });
+      } catch (downloadError) {
+        const status = downloadError instanceof AxiosError ? downloadError.response?.status : undefined;
+        const errorMsg = this.extractErrorMessage(downloadError);
+        this.log.error('Failed to download image from source URL', {
+          sourceUrl: params.sourceUrl,
+          status,
+          error: errorMsg,
+        });
+        return {
+          id: '',
+          productNumber: '',
+          action: 'error',
+          success: false,
+          error: `Failed to download image: ${status ? `HTTP ${status}` : errorMsg}`,
+        };
+      }
 
       const fileBuffer = Buffer.from(imageResponse.data);
       const contentType = imageResponse.headers['content-type'] || 'application/octet-stream';
       const fileSize = fileBuffer.length;
+
+      this.log.debug('Image downloaded successfully', {
+        sourceUrl: params.sourceUrl,
+        contentType,
+        fileSize,
+      });
 
       // Extract file extension
       let extension = params.fileName.split('.').pop()?.toLowerCase() || '';
@@ -292,28 +316,59 @@ export class ShopwareClient implements IShopwareClient {
       if (params.title) createPayload.title = params.title;
       if (params.alt) createPayload.alt = params.alt;
 
-      const createResponse = await this.http.post('/api/media', createPayload);
-      const mediaId = createResponse.data?.data?.id || createResponse.data?.id || createResponse.headers?.location?.split('/').pop();
+      let mediaId: string;
+      try {
+        const createResponse = await this.http.post('/api/media', createPayload);
+        mediaId = createResponse.data?.data?.id || createResponse.data?.id || createResponse.headers?.location?.split('/').pop();
 
-      if (!mediaId) {
-        throw new Error('Failed to get media ID from create response');
+        if (!mediaId) {
+          throw new Error('Failed to get media ID from create response');
+        }
+      } catch (createError) {
+        const errorMsg = this.extractErrorMessage(createError);
+        this.log.error('Failed to create media entity in Shopware', {
+          error: errorMsg,
+        });
+        return {
+          id: '',
+          productNumber: '',
+          action: 'error',
+          success: false,
+          error: `Failed to create media entity: ${errorMsg}`,
+        };
       }
 
       // Upload the file to the media entity
       const fileNameWithoutExt = params.fileName.replace(/\.[^/.]+$/, '');
-      await this.http.post(
-        `/api/_action/media/${mediaId}/upload`,
-        fileBuffer,
-        {
-          params: {
-            extension,
-            fileName: fileNameWithoutExt,
-          },
-          headers: {
-            'Content-Type': contentType,
-          },
-        }
-      );
+      try {
+        await this.http.post(
+          `/api/_action/media/${mediaId}/upload`,
+          fileBuffer,
+          {
+            params: {
+              extension,
+              fileName: fileNameWithoutExt,
+            },
+            headers: {
+              'Content-Type': contentType,
+            },
+          }
+        );
+      } catch (uploadError) {
+        const errorMsg = this.extractErrorMessage(uploadError);
+        this.log.error('Failed to upload file to media entity', {
+          mediaId,
+          fileName: params.fileName,
+          error: errorMsg,
+        });
+        return {
+          id: mediaId, // Return mediaId even on upload failure for potential cleanup
+          productNumber: '',
+          action: 'error',
+          success: false,
+          error: `Failed to upload file: ${errorMsg}`,
+        };
+      }
 
       this.log.info('Media created and uploaded successfully', { mediaId, fileName: params.fileName });
 
@@ -327,7 +382,10 @@ export class ShopwareClient implements IShopwareClient {
       };
     } catch (error) {
       const errorMessage = this.extractErrorMessage(error);
-      this.log.error('Failed to create media from URL', { sourceUrl: params.sourceUrl, error: errorMessage });
+      this.log.error('Failed to create media from URL (unexpected error)', {
+        sourceUrl: params.sourceUrl,
+        error: errorMessage,
+      });
 
       return {
         id: '',
@@ -1113,6 +1171,8 @@ export class ShopwareClient implements IShopwareClient {
 
   /**
    * Bulk sync property options
+   * Uses upsert first, then a separate update pass for positions
+   * (Shopware's upsert doesn't reliably update position for existing records)
    */
   async bulkSyncPropertyOptions(options: ShopwarePropertyOption[]): Promise<ShopwareBulkSyncResult> {
     this.log.info('Bulk syncing property options', { count: options.length });
@@ -1120,6 +1180,13 @@ export class ShopwareClient implements IShopwareClient {
     try {
       const payload = options.map((o) => this.buildPropertyOptionPayload(o));
 
+      // Log sample payload to verify positions are included
+      if (payload.length > 0) {
+        const sampleStr = payload.slice(0, 5).map((p) => `${p.name}:${p.position}`).join(', ');
+        this.log.info(`Payload to Shopware (first 5): ${sampleStr}`);
+      }
+
+      // Step 1: Upsert all options (creates new ones, updates basic fields)
       await this.http.post('/api/_action/sync', {
         'upsert-property-option': {
           entity: 'property_group_option',
@@ -1266,6 +1333,61 @@ export class ShopwareClient implements IShopwareClient {
   async priceExists(id: string): Promise<boolean> {
     const price = await this.getPriceById(id);
     return price !== null;
+  }
+
+  /**
+   * Bulk sync prices (rules)
+   */
+  async bulkSyncPrices(
+    prices: Array<{
+      id: string;
+      name: string;
+      priority?: number;
+      translations?: Record<string, { name: string }>;
+    }>
+  ): Promise<ShopwareBulkSyncResult> {
+    this.log.info('Bulk syncing prices', { count: prices.length });
+
+    try {
+      const payload = prices.map((p) => ({
+        id: p.id,
+        name: p.name,
+        priority: p.priority ?? 100,
+        ...(p.translations && { translations: p.translations }),
+      }));
+
+      await this.http.post('/api/_action/sync', {
+        'upsert-rule': {
+          entity: 'rule',
+          action: 'upsert',
+          payload,
+        },
+      });
+
+      return {
+        success: true,
+        results: prices.map((p) => ({
+          productNumber: '',
+          shopwareId: p.id,
+          action: 'create' as const,
+          success: true,
+        })),
+      };
+    } catch (error) {
+      const errorMessage = this.extractErrorMessage(error);
+      this.log.error('Bulk price sync failed', { error: errorMessage });
+
+      return {
+        success: false,
+        results: prices.map((p) => ({
+          productNumber: '',
+          shopwareId: p.id,
+          action: 'create' as const,
+          success: false,
+          error: errorMessage,
+        })),
+      };
+    }
   }
 
   // ============================================
@@ -1614,10 +1736,23 @@ export class ShopwareClient implements IShopwareClient {
     if (option.id) payload.id = option.id;
     if (option.groupId) payload.groupId = option.groupId;
     if (option.name !== undefined) payload.name = option.name;
-    if (option.position !== undefined) payload.position = option.position;
+    // Always include position as integer, default to 1 if not provided
+    const position = option.position !== undefined ? Number(option.position) : 1;
+    payload.position = position;
     if (option.colorHexCode) payload.colorHexCode = option.colorHexCode;
     if (option.mediaId) payload.mediaId = option.mediaId;
-    if (option.translations) payload.translations = option.translations;
+
+    // Include translations with position for each language
+    // Shopware stores position in property_group_option_translation table
+    if (option.translations) {
+      payload.translations = {};
+      for (const [langCode, trans] of Object.entries(option.translations)) {
+        payload.translations[langCode] = {
+          ...trans,
+          position, // Add position to each translation
+        };
+      }
+    }
 
     // Remove internal tracking fields
     delete payload._plentyAttributeId;
