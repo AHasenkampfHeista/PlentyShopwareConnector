@@ -11,6 +11,7 @@ import type {
   PlentySalesPrice,
   PlentyManufacturer,
   PlentyUnit,
+  PlentyProperty,
 } from '../types/plenty';
 import type { DecryptedSyncJobData, ConfigSyncResult } from '../types/sync';
 
@@ -45,6 +46,7 @@ export class ConfigSyncProcessor {
       salesPrices: { synced: 0, errors: 0 },
       manufacturers: { synced: 0, errors: 0 },
       units: { synced: 0, errors: 0 },
+      properties: { synced: 0, errors: 0 },
       duration: 0,
     };
 
@@ -63,21 +65,28 @@ export class ConfigSyncProcessor {
       });
       await shopware.authenticate();
 
+      // Ensure custom field set for Plenty connector exists (for sourceType tracking)
+      log.info('Ensuring Plenty custom field set exists');
+      await shopware.ensurePlentyCustomFieldSet();
+
       // Sync each config type
       log.info('Syncing categories');
-      //result.categories = await this.syncCategories(jobData.tenantId, plenty, shopware);
+      result.categories = await this.syncCategories(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing attributes');
-      //result.attributes = await this.syncAttributes(jobData.tenantId, plenty, shopware);
+      result.attributes = await this.syncAttributes(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing sales prices');
       result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing manufacturers');
-      //result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty, shopware);
+      result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty, shopware);
 
       log.info('Syncing units');
       result.units = await this.syncUnits(jobData.tenantId, plenty, shopware);
+
+      log.info('Syncing properties');
+      result.properties = await this.syncProperties(jobData.tenantId, plenty, shopware);
 
       // Update sync state
       await this.updateSyncState(jobData.tenantId);
@@ -445,6 +454,10 @@ export class ConfigSyncProcessor {
         sortingType: string;
         position: number;
         translations: Record<string, { name: string }>;
+        customFields?: {
+          plentySourceType?: 'ATTRIBUTE' | 'PROPERTY';
+          plentySourceId?: number;
+        };
       }> = [];
 
       const attributeMappingUpdates: Array<{
@@ -500,6 +513,10 @@ export class ConfigSyncProcessor {
           sortingType: 'alphanumeric',
           position: attribute.position,
           translations,
+          customFields: {
+            plentySourceType: 'ATTRIBUTE',
+            plentySourceId: attribute.id,
+          },
         });
 
         attributeMappingUpdates.push({
@@ -1408,6 +1425,393 @@ export class ConfigSyncProcessor {
             isDecimalPlacesAllowed: unit.isDecimalPlacesAllowed,
             names,
             rawData: unit as unknown as object,
+            syncedAt: new Date(),
+          },
+        });
+      })
+    );
+  }
+
+  /**
+   * Sync properties from Plenty using bulk operations
+   * Properties are filtered by referrers and optionally clients based on tenant config
+   */
+  private async syncProperties(
+    tenantId: string,
+    plenty: PlentyClient,
+    shopware: IShopwareClient
+  ): Promise<{ synced: number; errors: number }> {
+    const log = createJobLogger('', tenantId, 'CONFIG');
+
+    try {
+      // Get filter settings from tenant config
+      const { TenantConfigService } = await import('../services/TenantConfigService');
+      const configService = new TenantConfigService();
+
+      const referrerIds = await configService.getPropertyReferrers(tenantId);
+      const clientIds = await configService.getPropertyClients(tenantId);
+
+      log.info('Property filter settings', { referrerIds, clientIds });
+
+      // Fetch all properties from Plenty
+      const allProperties = await plenty.getProperties('item');
+
+      if (allProperties.length === 0) {
+        log.info('No properties to sync');
+        return { synced: 0, errors: 0 };
+      }
+
+      // Filter properties based on referrers and clients
+      const properties = plenty.filterProperties(allProperties, referrerIds, clientIds);
+
+      log.info('Properties after filtering', {
+        total: allProperties.length,
+        filtered: properties.length,
+        referrerIds,
+        clientIds,
+      });
+
+      if (properties.length === 0) {
+        log.info('No properties match filter criteria');
+        return { synced: 0, errors: 0 };
+      }
+
+      log.info('Starting bulk property sync', { count: properties.length });
+
+      // Step 1: Bulk upsert to local cache
+      await this.bulkUpsertPropertiesToCache(tenantId, properties);
+
+      // Step 2: Get all existing mappings at once
+      const { PropertyMappingService } = await import('../services/PropertyMappingService');
+      const mappingService = new PropertyMappingService();
+
+      const existingPropertyMappings = await mappingService.getBatchPropertyMappings(
+        tenantId,
+        properties.map((p) => p.id)
+      );
+
+      // Collect all selection IDs for batch lookup
+      const allSelectionIds: number[] = [];
+      for (const property of properties) {
+        if (property.selections) {
+          for (const selection of property.selections) {
+            allSelectionIds.push(selection.id);
+          }
+        }
+      }
+
+      const existingSelectionMappings = await mappingService.getBatchPropertySelectionMappings(
+        tenantId,
+        allSelectionIds
+      );
+
+      log.info('Loaded existing mappings', {
+        propertyMappings: Object.keys(existingPropertyMappings).length,
+        selectionMappings: Object.keys(existingSelectionMappings).length,
+      });
+
+      // Helper to generate UUID
+      const generateUuid = (): string => {
+        return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          const v = c === 'x' ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        });
+      };
+
+      // Locale mapping for translations
+      const localeMap: Record<string, string> = {
+        de: 'de-DE',
+        en: 'en-GB',
+        fr: 'fr-FR',
+        it: 'it-IT',
+        es: 'es-ES',
+        nl: 'nl-NL',
+        pl: 'pl-PL',
+      };
+
+      // Step 3: Prepare bulk payload for property groups
+      const propertyGroupPayload: Array<{
+        id: string;
+        name: string;
+        displayType: string;
+        sortingType: string;
+        position: number;
+        translations: Record<string, { name: string }>;
+        customFields?: {
+          plentySourceType?: 'ATTRIBUTE' | 'PROPERTY';
+          plentySourceId?: number;
+        };
+      }> = [];
+
+      const propertyMappingUpdates: Array<{
+        plentyPropertyId: number;
+        plentyPropertyGroupId: number | null;
+        shopwarePropertyGroupId: string;
+        mappingType: 'MANUAL' | 'AUTO';
+        lastSyncAction: 'create' | 'update';
+      }> = [];
+
+      // Track generated Shopware IDs for property options
+      const propertyToShopwareGroupId = new Map<number, string>();
+
+      for (const property of properties) {
+        // Extract localized names
+        const names: Record<string, string> = {};
+        if (property.names) {
+          for (const name of property.names) {
+            names[name.lang] = name.name;
+          }
+        }
+
+        const propertyName = names['de'] || names['en'] || Object.values(names)[0] || `Property ${property.id}`;
+
+        // Build translations
+        const translations: Record<string, { name: string }> = {};
+        for (const [lang, name] of Object.entries(names)) {
+          const shopwareLang = localeMap[lang] || lang;
+          translations[shopwareLang] = { name };
+        }
+
+        // Get or generate Shopware ID
+        const existingMapping = existingPropertyMappings[property.id];
+        const shopwareId = existingMapping?.shopwarePropertyGroupId || generateUuid();
+
+        // Track for later use by property options
+        propertyToShopwareGroupId.set(property.id, shopwareId);
+
+        // Properties in Shopware are typically text-based
+        // Selection/multiSelection properties will have options
+        const displayType = 'text';
+
+        propertyGroupPayload.push({
+          id: shopwareId,
+          name: propertyName,
+          displayType,
+          sortingType: 'alphanumeric',
+          position: property.position,
+          translations,
+          customFields: {
+            plentySourceType: 'PROPERTY',
+            plentySourceId: property.id,
+          },
+        });
+
+        propertyMappingUpdates.push({
+          plentyPropertyId: property.id,
+          plentyPropertyGroupId: property.propertyGroupId,
+          shopwarePropertyGroupId: shopwareId,
+          mappingType: (existingMapping?.mappingType as 'MANUAL' | 'AUTO') || 'AUTO',
+          lastSyncAction: existingMapping ? 'update' : 'create',
+        });
+      }
+
+      // Step 4: Bulk sync property groups to Shopware
+      log.info('Executing bulk sync for property groups', { count: propertyGroupPayload.length });
+      const groupResult = await shopware.bulkSyncPropertyGroups(propertyGroupPayload);
+
+      let totalSynced = 0;
+      let totalErrors = 0;
+
+      if (groupResult.success) {
+        await mappingService.upsertPropertyMappings(tenantId, propertyMappingUpdates);
+        totalSynced += properties.length;
+        log.info('Property groups synced successfully', { count: properties.length });
+      } else {
+        const successCount = groupResult.results.filter((r) => r.success).length;
+        const errorCount = groupResult.results.filter((r) => !r.success).length;
+
+        const successfulMappings = propertyMappingUpdates.filter((_, index) => groupResult.results[index]?.success);
+        if (successfulMappings.length > 0) {
+          await mappingService.upsertPropertyMappings(tenantId, successfulMappings);
+        }
+
+        totalSynced += successCount;
+        totalErrors += errorCount;
+        log.warn('Property groups sync completed with errors', { synced: successCount, errors: errorCount });
+      }
+
+      // Step 5: Prepare bulk payload for property options (from selections)
+      const propertyOptionPayload: Array<{
+        id: string;
+        groupId: string;
+        name: string;
+        position: number;
+        translations: Record<string, { name: string }>;
+      }> = [];
+
+      const selectionMappingUpdates: Array<{
+        plentyPropertyId: number;
+        plentySelectionId: number;
+        shopwarePropertyGroupId: string;
+        shopwarePropertyOptionId: string;
+        mappingType: 'MANUAL' | 'AUTO';
+        lastSyncAction: 'create' | 'update';
+      }> = [];
+
+      for (const property of properties) {
+        const shopwareGroupId = propertyToShopwareGroupId.get(property.id);
+        if (!shopwareGroupId) continue;
+
+        // Only properties with cast 'selection' or 'multiSelection' have selections
+        if (!property.selections || property.selections.length === 0) continue;
+
+        for (const selection of property.selections) {
+          // Extract localized values from selection relation
+          const selectionNames: Record<string, string> = {};
+          if (selection.relation?.relationValues) {
+            for (const rv of selection.relation.relationValues) {
+              selectionNames[rv.lang] = rv.value;
+            }
+          }
+
+          const selectionName =
+            selectionNames['de'] || selectionNames['en'] || Object.values(selectionNames)[0] || `Option ${selection.id}`;
+
+          // Build translations
+          const translations: Record<string, { name: string }> = {};
+          for (const [lang, name] of Object.entries(selectionNames)) {
+            const shopwareLang = localeMap[lang] || lang;
+            translations[shopwareLang] = { name };
+          }
+
+          // Get or generate Shopware ID
+          const existingSelectionMapping = existingSelectionMappings[selection.id];
+          const shopwareOptionId = existingSelectionMapping?.shopwarePropertyOptionId || generateUuid();
+
+          propertyOptionPayload.push({
+            id: shopwareOptionId,
+            groupId: shopwareGroupId,
+            name: selectionName,
+            position: selection.position,
+            translations,
+          });
+
+          selectionMappingUpdates.push({
+            plentyPropertyId: property.id,
+            plentySelectionId: selection.id,
+            shopwarePropertyGroupId: shopwareGroupId,
+            shopwarePropertyOptionId: shopwareOptionId,
+            mappingType: (existingSelectionMapping?.mappingType as 'MANUAL' | 'AUTO') || 'AUTO',
+            lastSyncAction: existingSelectionMapping ? 'update' : 'create',
+          });
+        }
+      }
+
+      // Step 6: Bulk sync property options to Shopware
+      if (propertyOptionPayload.length > 0) {
+        log.info('Executing bulk sync for property options', { count: propertyOptionPayload.length });
+
+        const optionResult = await shopware.bulkSyncPropertyOptions(propertyOptionPayload);
+
+        if (optionResult.success) {
+          await mappingService.upsertPropertySelectionMappings(tenantId, selectionMappingUpdates);
+          log.info('Property options synced successfully', { count: propertyOptionPayload.length });
+        } else {
+          const successCount = optionResult.results.filter((r) => r.success).length;
+          const errorCount = optionResult.results.filter((r) => !r.success).length;
+
+          const successfulMappings = selectionMappingUpdates.filter((_, index) => optionResult.results[index]?.success);
+          if (successfulMappings.length > 0) {
+            await mappingService.upsertPropertySelectionMappings(tenantId, successfulMappings);
+          }
+
+          totalErrors += errorCount;
+          log.warn('Property options sync completed with errors', { synced: successCount, errors: errorCount });
+        }
+      }
+
+      log.info('Bulk property sync completed', { synced: totalSynced, errors: totalErrors });
+      return { synced: totalSynced, errors: totalErrors };
+    } catch (error) {
+      log.error('Failed to sync properties', { error: error instanceof Error ? error.message : String(error) });
+      throw new Error(`Failed to sync properties: ${error}`);
+    }
+  }
+
+  /**
+   * Bulk upsert properties to local cache
+   */
+  private async bulkUpsertPropertiesToCache(tenantId: string, properties: PlentyProperty[]): Promise<void> {
+    await this.prisma.$transaction(
+      properties.map((property) => {
+        // Extract localized names
+        const names: Record<string, string> = {};
+        if (property.names) {
+          for (const name of property.names) {
+            names[name.lang] = name.name;
+          }
+        }
+
+        // Extract display options from options
+        const displayOptions: Record<string, unknown> = {};
+        if (property.options) {
+          for (const opt of property.options) {
+            if (opt.typeOptionIdentifier === 'display') {
+              displayOptions[opt.typeOptionIdentifier] = opt.propertyOptionValues?.map((pov) => pov.value) || [];
+            }
+          }
+        }
+
+        // Format selections for storage
+        const selections =
+          property.selections?.map((sel) => ({
+            id: sel.id,
+            position: sel.position,
+            values:
+              sel.relation?.relationValues?.reduce(
+                (acc, rv) => {
+                  acc[rv.lang] = rv.value;
+                  return acc;
+                },
+                {} as Record<string, string>
+              ) || {},
+          })) || [];
+
+        // Extract property group info
+        const propertyGroup = property.groups?.[0]
+          ? {
+              id: property.groups[0].id,
+              names:
+                property.groups[0].names?.reduce(
+                  (acc, n) => {
+                    acc[n.lang] = n.name;
+                    return acc;
+                  },
+                  {} as Record<string, string>
+                ) || {},
+            }
+          : null;
+
+        return this.prisma.plentyProperty.upsert({
+          where: {
+            tenantId_id: {
+              tenantId,
+              id: property.id,
+            },
+          },
+          create: {
+            id: property.id,
+            tenantId,
+            propertyGroupId: property.propertyGroupId,
+            cast: property.cast,
+            position: property.position,
+            names,
+            displayOptions: displayOptions as object,
+            selections,
+            propertyGroup: propertyGroup as object | undefined,
+            rawData: property as unknown as object,
+            syncedAt: new Date(),
+          },
+          update: {
+            propertyGroupId: property.propertyGroupId,
+            cast: property.cast,
+            position: property.position,
+            names,
+            displayOptions: displayOptions as object,
+            selections,
+            propertyGroup: propertyGroup as object | undefined,
+            rawData: property as unknown as object,
             syncedAt: new Date(),
           },
         });

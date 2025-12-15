@@ -138,6 +138,12 @@ export interface IShopwareClient {
   bulkSyncPropertyOptions(options: ShopwarePropertyOption[]): Promise<ShopwareBulkSyncResult>;
 
   /**
+   * Ensure custom field set for Plenty connector exists
+   * Creates the custom field set with plentySourceType and plentySourceId fields if not exists
+   */
+  ensurePlentyCustomFieldSet(): Promise<void>;
+
+  /**
    * Create a new price
    */
   createPrice(price: {

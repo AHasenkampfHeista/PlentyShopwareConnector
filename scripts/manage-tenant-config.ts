@@ -31,6 +31,8 @@ const KNOWN_KEYS: Record<string, string> = {
   plentyFrontendUrl: 'Plenty frontend URL for image URLs (e.g., https://your-shop.plentymarkets.de)',
   defaultSalesPriceId: 'Sales price ID to use for Shopware main price (number)',
   rrpSalesPriceId: 'Sales price ID to use for RRP/list price (number)',
+  propertyReferrers: 'Array of Plenty referrer IDs to import properties for (default: ["1.00"] for webshop)',
+  propertyClients: 'Array of Plenty client IDs (Mandanten) to import properties for (optional)',
   taxMappings: 'JSON object mapping Plenty tax IDs to Shopware tax IDs',
 };
 

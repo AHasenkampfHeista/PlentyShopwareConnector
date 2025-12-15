@@ -13,6 +13,10 @@ export const ConfigKeys = {
   DEFAULT_SALES_PRICE_ID: 'defaultSalesPriceId',
   RRP_SALES_PRICE_ID: 'rrpSalesPriceId',
 
+  // Property Configuration
+  PROPERTY_REFERRERS: 'propertyReferrers', // Array of referrer IDs to import, e.g., ["1.00"] for webshop
+  PROPERTY_CLIENTS: 'propertyClients', // Array of Plenty client IDs (Mandanten), e.g., ["18857"]
+
   // Mappings
   TAX_MAPPINGS: 'taxMappings', // { plentyTaxId: shopwareTaxId }
 } as const;
@@ -262,5 +266,22 @@ export class TenantConfigService {
     const mappings = await this.getTaxMappings(tenantId);
     if (!mappings) return null;
     return mappings[String(plentyTaxId)] || null;
+  }
+
+  /**
+   * Get property referrers to import (defaults to ["1.00"] for webshop)
+   */
+  async getPropertyReferrers(tenantId: string): Promise<string[]> {
+    const referrers = await this.getArray<string>(tenantId, ConfigKeys.PROPERTY_REFERRERS);
+    // Default to webshop referrer if not configured
+    return referrers ?? ['1.00'];
+  }
+
+  /**
+   * Get property clients (Mandanten) to import
+   * Returns null if not configured (meaning: import for all clients)
+   */
+  async getPropertyClients(tenantId: string): Promise<string[] | null> {
+    return this.getArray<string>(tenantId, ConfigKeys.PROPERTY_CLIENTS);
   }
 }

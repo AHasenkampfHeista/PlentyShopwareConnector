@@ -34,6 +34,7 @@ model Tenant {
   plentySalesPrices      PlentySalesPrice[]
   plentyManufacturers    PlentyManufacturer[]
   plentyUnits            PlentyUnit[]
+  plentyProperties       PlentyProperty[]
   mockShopwareProducts   MockShopwareProduct[]
   mockShopwareCategories    MockShopwareCategory[]
   mockShopwarePropertyGroups MockShopwarePropertyGroup[]
@@ -43,6 +44,8 @@ model Tenant {
   categoryMappings          CategoryMapping[]
   attributeMappings         AttributeMapping[]
   attributeValueMappings    AttributeValueMapping[]
+  propertyMappings          PropertyMapping[]
+  propertySelectionMappings PropertySelectionMapping[]
   salesPriceMappings        SalesPriceMapping[]
   manufacturerMappings      ManufacturerMapping[]
   mockShopwareManufacturers MockShopwareManufacturer[]
@@ -367,6 +370,36 @@ model PlentyUnit {
   @@map("plenty_units")
 }
 
+model PlentyProperty {
+  id                Int      @id
+  tenantId          String   @map("tenant_id")
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  propertyGroupId   Int?     @map("property_group_id")
+  cast              String   // 'shortText', 'selection', 'multiSelection', 'int', 'float', 'file', 'longText', 'empty', 'string'
+  position          Int      @default(0)
+
+  // Localized names: { "de": "Zielgruppen", "en": "Target Groups" }
+  names             Json?
+
+  // Display options from Plenty (e.g., showOnItemsPage, showInItemListing)
+  displayOptions    Json?    @map("display_options")
+
+  // Selection values for selection/multiSelection cast types
+  // Stored as: [{ id: 1, values: { "de": "Damen", "en": "Women" } }, ...]
+  selections        Json?
+
+  // Property group info
+  propertyGroup     Json?    @map("property_group")
+
+  rawData           Json?    @map("raw_data")
+  syncedAt          DateTime @default(now()) @map("synced_at")
+
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@index([tenantId, propertyGroupId])
+  @@map("plenty_properties")
+}
+
 // ============================================
 // MOCK SHOPWARE PRODUCTS
 // ============================================
@@ -562,6 +595,66 @@ model AttributeValueMapping {
   @@index([tenantId, plentyAttributeId])
   @@index([tenantId, mappingType])
   @@map("attribute_value_mappings")
+}
+
+// ============================================
+// PROPERTY MAPPING (Plenty Properties ↔ Shopware)
+// ============================================
+
+model PropertyMapping {
+  id                     String      @id @default(uuid())
+  tenantId               String      @map("tenant_id")
+  tenant                 Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // PlentyMarkets identifiers
+  plentyPropertyId       Int         @map("plenty_property_id")
+  plentyPropertyGroupId  Int?        @map("plenty_property_group_id")
+
+  // Shopware identifiers
+  shopwarePropertyGroupId String     @map("shopware_property_group_id")
+
+  // Mapping metadata
+  mappingType            MappingType @map("mapping_type")
+  lastSyncedAt           DateTime    @map("last_synced_at")
+  lastSyncAction         String      @map("last_sync_action") // 'create', 'update'
+
+  // Timestamps
+  createdAt              DateTime    @default(now()) @map("created_at")
+  updatedAt              DateTime    @updatedAt @map("updated_at")
+
+  @@unique([tenantId, plentyPropertyId])
+  @@index([tenantId, plentyPropertyGroupId])
+  @@index([tenantId, mappingType])
+  @@map("property_mappings")
+}
+
+model PropertySelectionMapping {
+  id                       String      @id @default(uuid())
+  tenantId                 String      @map("tenant_id")
+  tenant                   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // PlentyMarkets identifiers
+  plentyPropertyId         Int         @map("plenty_property_id")
+  plentySelectionId        Int         @map("plenty_selection_id")
+
+  // Shopware identifiers
+  shopwarePropertyGroupId  String      @map("shopware_property_group_id")
+  shopwarePropertyOptionId String      @map("shopware_property_option_id")
+
+  // Mapping metadata
+  mappingType              MappingType @map("mapping_type")
+  lastSyncedAt             DateTime    @map("last_synced_at")
+  lastSyncAction           String      @map("last_sync_action") // 'create', 'update'
+
+  // Timestamps
+  createdAt                DateTime    @default(now()) @map("created_at")
+  updatedAt                DateTime    @updatedAt @map("updated_at")
+
+  @@unique([tenantId, plentySelectionId])
+  @@unique([tenantId, shopwarePropertyOptionId])
+  @@index([tenantId, plentyPropertyId])
+  @@index([tenantId, mappingType])
+  @@map("property_selection_mappings")
 }
 
 // ============================================

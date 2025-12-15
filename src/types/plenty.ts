@@ -418,6 +418,106 @@ export interface PlentyUnitName {
 }
 
 // ============================================
+// PROPERTIES (Eigenschaften)
+// ============================================
+
+export interface PlentyProperty {
+  id: number;
+  propertyId: number;
+  cast: 'shortText' | 'selection' | 'multiSelection' | 'int' | 'float' | 'file' | 'longText' | 'empty' | 'string';
+  typeIdentifier: string; // 'item', 'contact', etc.
+  position: number;
+  propertyGroupId: number | null;
+  names?: PlentyPropertyName[];
+  options?: PlentyPropertyOption[];
+  groups?: PlentyPropertyGroup[];
+  selections?: PlentyPropertySelection[];
+  amazons?: unknown[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlentyPropertyName {
+  propertyId: number;
+  lang: string;
+  name: string;
+  description: string;
+  id: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlentyPropertyOption {
+  propertyId: number;
+  typeOptionIdentifier: 'display' | 'clients' | 'referrers' | 'displayOrder' | 'markup' | 'units' | 'vatId';
+  id: number;
+  createdAt: string;
+  updatedAt: string;
+  propertyOptionValues?: PlentyPropertyOptionValue[];
+}
+
+export interface PlentyPropertyOptionValue {
+  optionId: number;
+  value: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlentyPropertyGroup {
+  id: number;
+  position: number;
+  names?: PlentyPropertyGroupName[];
+  createdAt: string;
+  updatedAt: string;
+  groupRelation?: {
+    propertyId: number;
+    propertyGroupId: number;
+  };
+}
+
+export interface PlentyPropertyGroupName {
+  propertyGroupId: number;
+  lang: string;
+  name: string;
+  description: string;
+  id: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlentyPropertySelection {
+  propertyId: number;
+  position: number;
+  id: number;
+  createdAt: string;
+  updatedAt: string;
+  relation?: PlentyPropertySelectionRelation;
+}
+
+export interface PlentyPropertySelectionRelation {
+  propertyId: number;
+  selectionRelationId: number;
+  groupId: number | null;
+  markup: number | null;
+  relationTargetId: number | null;
+  relationTypeIdentifier: string | null;
+  createdAt: string;
+  updatedAt: string;
+  id: number;
+  relationValues?: PlentyPropertySelectionValue[];
+}
+
+export interface PlentyPropertySelectionValue {
+  propertyRelationId: number;
+  lang: string;
+  value: string;
+  description: string;
+  id: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ============================================
 // API REQUEST PARAMETERS
 // ============================================
 

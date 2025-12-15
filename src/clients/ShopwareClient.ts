@@ -356,11 +356,25 @@ export class ShopwareClient implements IShopwareClient {
         );
       } catch (uploadError) {
         const errorMsg = this.extractErrorMessage(uploadError);
-        this.log.error('Failed to upload file to media entity', {
-          mediaId,
-          fileName: params.fileName,
-          error: errorMsg,
-        });
+        // Log detailed error info for debugging
+        if (uploadError instanceof AxiosError) {
+          this.log.error('Failed to upload file to media entity', {
+            mediaId,
+            fileName: params.fileName,
+            extension,
+            contentType,
+            fileSize: fileBuffer.length,
+            error: errorMsg,
+            status: uploadError.response?.status,
+            responseData: JSON.stringify(uploadError.response?.data),
+          });
+        } else {
+          this.log.error('Failed to upload file to media entity', {
+            mediaId,
+            fileName: params.fileName,
+            error: errorMsg,
+          });
+        }
         return {
           id: mediaId, // Return mediaId even on upload failure for potential cleanup
           productNumber: '',
@@ -1222,6 +1236,111 @@ export class ShopwareClient implements IShopwareClient {
   }
 
   // ============================================
+  // CUSTOM FIELD METHODS
+  // ============================================
+
+  /**
+   * Ensure the custom field set for Plenty connector exists
+   * Creates the custom field set with plentySourceType and plentySourceId fields if not exists
+   */
+  async ensurePlentyCustomFieldSet(): Promise<void> {
+    const customFieldSetId = 'plenty_connector_property_group';
+
+    try {
+      // Check if custom field set already exists
+      const response = await this.http.post('/api/search/custom-field-set', {
+        filter: [
+          { type: 'equals', field: 'name', value: customFieldSetId },
+        ],
+      });
+
+      if (response.data?.data?.length > 0) {
+        this.log.debug('Plenty custom field set already exists');
+        return;
+      }
+
+      this.log.info('Creating Plenty custom field set');
+
+      // Create the custom field set with fields and relations
+      await this.http.post('/api/_action/sync', {
+        'create-custom-field-set': {
+          entity: 'custom_field_set',
+          action: 'upsert',
+          payload: [
+            {
+              id: this.generateUuid(),
+              name: customFieldSetId,
+              config: {
+                label: {
+                  'en-GB': 'Plenty Connector',
+                  'de-DE': 'Plenty Connector',
+                },
+              },
+              active: true,
+              global: false,
+              position: 1,
+              customFields: [
+                {
+                  id: this.generateUuid(),
+                  name: 'plentySourceType',
+                  type: 'select',
+                  config: {
+                    label: {
+                      'en-GB': 'Plenty Source Type',
+                      'de-DE': 'Plenty Quelltyp',
+                    },
+                    helpText: {
+                      'en-GB': 'Whether this property group originated from a Plenty Attribute or Property',
+                      'de-DE': 'Ob diese Eigenschaftsgruppe aus einem Plenty Attribut oder Eigenschaft stammt',
+                    },
+                    options: [
+                      { value: 'ATTRIBUTE', label: { 'en-GB': 'Attribute', 'de-DE': 'Attribut' } },
+                      { value: 'PROPERTY', label: { 'en-GB': 'Property', 'de-DE': 'Eigenschaft' } },
+                    ],
+                    componentName: 'sw-single-select',
+                    customFieldType: 'select',
+                  },
+                  active: true,
+                },
+                {
+                  id: this.generateUuid(),
+                  name: 'plentySourceId',
+                  type: 'int',
+                  config: {
+                    label: {
+                      'en-GB': 'Plenty Source ID',
+                      'de-DE': 'Plenty Quell-ID',
+                    },
+                    helpText: {
+                      'en-GB': 'The original ID in PlentyMarkets',
+                      'de-DE': 'Die ursprüngliche ID in PlentyMarkets',
+                    },
+                    componentName: 'sw-field',
+                    customFieldType: 'int',
+                  },
+                  active: true,
+                },
+              ],
+              relations: [
+                {
+                  id: this.generateUuid(),
+                  entityName: 'property_group',
+                },
+              ],
+            },
+          ],
+        },
+      });
+
+      this.log.info('Plenty custom field set created successfully');
+    } catch (error) {
+      const errorMessage = this.extractErrorMessage(error);
+      this.log.error('Failed to create Plenty custom field set', { error: errorMessage });
+      // Don't throw - custom fields are optional, sync should continue
+    }
+  }
+
+  // ============================================
   // PRICE METHODS
   // ============================================
 
@@ -1722,6 +1841,7 @@ export class ShopwareClient implements IShopwareClient {
     if (group.sortingType) payload.sortingType = group.sortingType;
     if (group.position !== undefined) payload.position = group.position;
     if (group.translations) payload.translations = group.translations;
+    if (group.customFields) payload.customFields = group.customFields;
 
     // Remove internal tracking fields
     delete payload._plentyAttributeId;

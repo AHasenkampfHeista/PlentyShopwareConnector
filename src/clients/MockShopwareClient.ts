@@ -1662,6 +1662,14 @@ export class MockShopwareClient implements IShopwareClient {
   }
 
   /**
+   * Ensure the custom field set for Plenty connector exists
+   * Mock implementation - just logs
+   */
+  async ensurePlentyCustomFieldSet(): Promise<void> {
+    this.log.info('Mock Shopware: ensurePlentyCustomFieldSet called (no-op in mock)');
+  }
+
+  /**
    * Delete all products for this tenant (useful for testing)
    */
   async deleteAllProducts(): Promise<number> {

@@ -12,6 +12,7 @@ import {
   PlentySalesPrice,
   PlentyManufacturer,
   PlentyUnit,
+  PlentyProperty,
   PlentyStockManagementEntry,
 } from '../types/plenty';
 
@@ -536,6 +537,76 @@ export class PlentyClient {
 
     this.log.info('Fetched units', { count: response.entries.length });
     return response.entries;
+  }
+
+  // ============================================
+  // PROPERTY ENDPOINTS
+  // ============================================
+
+  /**
+   * Get all item properties
+   * @param typeIdentifier - Type of properties to fetch (default: 'item')
+   */
+  async getProperties(typeIdentifier = 'item'): Promise<PlentyProperty[]> {
+    const allProperties: PlentyProperty[] = [];
+    let page = 1;
+    let isLastPage = false;
+
+    while (!isLastPage) {
+      const response = await this.get<PlentyPaginatedResponse<PlentyProperty>>('/rest/properties', {
+        typeIdentifier,
+        page,
+        itemsPerPage: DEFAULT_ITEMS_PER_PAGE,
+      });
+      allProperties.push(...response.entries);
+      isLastPage = response.isLastPage;
+      page++;
+
+      if (!isLastPage) {
+        await this.delay(100);
+      }
+    }
+
+    this.log.info('Fetched all properties', { count: allProperties.length, typeIdentifier });
+    return allProperties;
+  }
+
+  /**
+   * Filter properties by referrer IDs and/or client IDs
+   * @param properties - Properties to filter
+   * @param referrerIds - Referrer IDs to match (e.g., ["1.00"] for webshop). Required.
+   * @param clientIds - Client IDs (Mandanten) to match. If null, client filter is skipped.
+   */
+  filterProperties(
+    properties: PlentyProperty[],
+    referrerIds: string[],
+    clientIds: string[] | null
+  ): PlentyProperty[] {
+    return properties.filter((property) => {
+      // Check referrers filter (required)
+      const referrerOptions = property.options?.filter((opt) => opt.typeOptionIdentifier === 'referrers') || [];
+      const matchesReferrer = referrerOptions.some((opt) =>
+        opt.propertyOptionValues?.some((pov) => referrerIds.includes(pov.value))
+      );
+
+      if (!matchesReferrer) {
+        return false;
+      }
+
+      // Check clients filter (optional)
+      if (clientIds !== null) {
+        const clientOptions = property.options?.filter((opt) => opt.typeOptionIdentifier === 'clients') || [];
+        const matchesClient = clientOptions.some((opt) =>
+          opt.propertyOptionValues?.some((pov) => clientIds.includes(pov.value))
+        );
+
+        if (!matchesClient) {
+          return false;
+        }
+      }
+
+      return true;
+    });
   }
 
   // ============================================

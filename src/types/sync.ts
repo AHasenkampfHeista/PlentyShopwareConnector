@@ -84,6 +84,10 @@ export interface ConfigSyncResult {
     synced: number;
     errors: number;
   };
+  properties: {
+    synced: number;
+    errors: number;
+  };
   duration: number;
 }
 

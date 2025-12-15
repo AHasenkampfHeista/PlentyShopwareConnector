@@ -123,6 +123,13 @@ export interface ShopwarePropertyGroup {
   position?: number;
   translations?: Record<string, { name: string; description?: string }>;
 
+  // Custom fields for metadata (synced to Shopware)
+  customFields?: {
+    plentySourceType?: 'ATTRIBUTE' | 'PROPERTY'; // Distinguishes Plenty Attributes from Properties
+    plentySourceId?: number; // Original ID in PlentyMarkets
+    [key: string]: unknown;
+  };
+
   // Plenty reference (internal use)
   _plentyAttributeId?: number;
 }
