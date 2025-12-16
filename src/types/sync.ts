@@ -63,6 +63,15 @@ export interface SyncError {
 // CONFIG SYNC SPECIFIC
 // ============================================
 
+/**
+ * Result for a single entity type sync (categories, attributes, etc.)
+ */
+export interface EntitySyncResult {
+  created: number; // New items created in Shopware
+  updated: number; // Existing items updated in Shopware
+  errors: number; // Items that failed to sync
+}
+
 export interface ConfigSyncResult {
   // Aggregate totals for dashboard display and database storage
   success: boolean;
@@ -73,30 +82,12 @@ export interface ConfigSyncResult {
   duration: number; // Total duration in milliseconds
 
   // Per-entity-type breakdown for detailed view
-  categories: {
-    synced: number;
-    errors: number;
-  };
-  attributes: {
-    synced: number;
-    errors: number;
-  };
-  salesPrices: {
-    synced: number;
-    errors: number;
-  };
-  manufacturers: {
-    synced: number;
-    errors: number;
-  };
-  units: {
-    synced: number;
-    errors: number;
-  };
-  properties: {
-    synced: number;
-    errors: number;
-  };
+  categories: EntitySyncResult;
+  attributes: EntitySyncResult;
+  salesPrices: EntitySyncResult;
+  manufacturers: EntitySyncResult;
+  units: EntitySyncResult;
+  properties: EntitySyncResult;
 }
 
 // ============================================

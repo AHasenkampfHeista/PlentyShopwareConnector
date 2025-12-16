@@ -89,21 +89,23 @@ export class SyncLogService {
     jobId: string,
     syncType: SyncType,
     entityName: string,
-    synced: number,
-    errors: number,
+    result: { created: number; updated: number; errors: number },
     details?: Record<string, unknown>
   ): Promise<void> {
+    const action = result.errors > 0 ? 'error' : (result.created > 0 ? 'create' : 'update');
     await this.logOperation({
       tenantId,
       jobId,
       entityType: syncType,
       entityId: `batch:${entityName}`,
-      action: errors > 0 ? 'error' : 'update',
-      success: errors === 0,
+      action,
+      success: result.errors === 0,
       details: {
         entityName,
-        synced,
-        errors,
+        created: result.created,
+        updated: result.updated,
+        errors: result.errors,
+        total: result.created + result.updated,
         ...details,
       },
     });

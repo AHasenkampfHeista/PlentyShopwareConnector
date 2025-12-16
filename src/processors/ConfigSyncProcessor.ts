@@ -13,7 +13,7 @@ import type {
   PlentyUnit,
   PlentyProperty,
 } from '../types/plenty';
-import type { DecryptedSyncJobData, ConfigSyncResult } from '../types/sync';
+import type { DecryptedSyncJobData, ConfigSyncResult, EntitySyncResult } from '../types/sync';
 import { getSyncLogService, SyncLogService } from '../services/SyncLogService';
 
 /**
@@ -54,13 +54,13 @@ export class ConfigSyncProcessor {
       itemsUpdated: 0,
       itemsFailed: 0,
       duration: 0,
-      // Per-entity breakdown
-      categories: { synced: 0, errors: 0 },
-      attributes: { synced: 0, errors: 0 },
-      salesPrices: { synced: 0, errors: 0 },
-      manufacturers: { synced: 0, errors: 0 },
-      units: { synced: 0, errors: 0 },
-      properties: { synced: 0, errors: 0 },
+      // Per-entity breakdown with created/updated/errors
+      categories: { created: 0, updated: 0, errors: 0 },
+      attributes: { created: 0, updated: 0, errors: 0 },
+      salesPrices: { created: 0, updated: 0, errors: 0 },
+      manufacturers: { created: 0, updated: 0, errors: 0 },
+      units: { created: 0, updated: 0, errors: 0 },
+      properties: { created: 0, updated: 0, errors: 0 },
     };
 
     try {
@@ -88,50 +88,44 @@ export class ConfigSyncProcessor {
       log.info('Syncing categories');
       result.categories = await this.syncCategories(jobData.tenantId, plenty, shopware);
       await this.syncLog.logEntityBatch(
-        jobData.tenantId, jobData.id, SyncType.CONFIG, 'categories',
-        result.categories.synced, result.categories.errors
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'categories', result.categories
       );
 
       log.info('Syncing attributes');
       result.attributes = await this.syncAttributes(jobData.tenantId, plenty, shopware);
       await this.syncLog.logEntityBatch(
-        jobData.tenantId, jobData.id, SyncType.CONFIG, 'attributes',
-        result.attributes.synced, result.attributes.errors
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'attributes', result.attributes
       );
 
       log.info('Syncing sales prices');
       result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty, shopware);
       await this.syncLog.logEntityBatch(
-        jobData.tenantId, jobData.id, SyncType.CONFIG, 'salesPrices',
-        result.salesPrices.synced, result.salesPrices.errors
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'salesPrices', result.salesPrices
       );
 
       log.info('Syncing manufacturers');
       result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty, shopware);
       await this.syncLog.logEntityBatch(
-        jobData.tenantId, jobData.id, SyncType.CONFIG, 'manufacturers',
-        result.manufacturers.synced, result.manufacturers.errors
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'manufacturers', result.manufacturers
       );
 
       log.info('Syncing units');
       result.units = await this.syncUnits(jobData.tenantId, plenty, shopware);
       await this.syncLog.logEntityBatch(
-        jobData.tenantId, jobData.id, SyncType.CONFIG, 'units',
-        result.units.synced, result.units.errors
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'units', result.units
       );
 
       log.info('Syncing properties');
       result.properties = await this.syncProperties(jobData.tenantId, plenty, shopware);
       await this.syncLog.logEntityBatch(
-        jobData.tenantId, jobData.id, SyncType.CONFIG, 'properties',
-        result.properties.synced, result.properties.errors
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'properties', result.properties
       );
 
       // Update sync state
       await this.updateSyncState(jobData.tenantId);
 
       // Calculate aggregate totals from per-entity results
-      const allResults = [
+      const allResults: EntitySyncResult[] = [
         result.categories,
         result.attributes,
         result.salesPrices,
@@ -140,8 +134,9 @@ export class ConfigSyncProcessor {
         result.properties,
       ];
 
-      result.itemsProcessed = allResults.reduce((sum, r) => sum + r.synced + r.errors, 0);
-      result.itemsUpdated = allResults.reduce((sum, r) => sum + r.synced, 0); // Config sync is mostly upserts
+      result.itemsProcessed = allResults.reduce((sum, r) => sum + r.created + r.updated + r.errors, 0);
+      result.itemsCreated = allResults.reduce((sum, r) => sum + r.created, 0);
+      result.itemsUpdated = allResults.reduce((sum, r) => sum + r.updated, 0);
       result.itemsFailed = allResults.reduce((sum, r) => sum + r.errors, 0);
       result.success = result.itemsFailed === 0;
       result.duration = Date.now() - startTime;
@@ -149,6 +144,7 @@ export class ConfigSyncProcessor {
       log.info('Config sync completed', {
         duration: result.duration,
         itemsProcessed: result.itemsProcessed,
+        itemsCreated: result.itemsCreated,
         itemsUpdated: result.itemsUpdated,
         itemsFailed: result.itemsFailed,
         categories: result.categories,
@@ -162,6 +158,7 @@ export class ConfigSyncProcessor {
       // Log job completion to sync_logs table
       await this.syncLog.logJobComplete(jobData.tenantId, jobData.id, SyncType.CONFIG, {
         itemsProcessed: result.itemsProcessed,
+        itemsCreated: result.itemsCreated,
         itemsUpdated: result.itemsUpdated,
         itemsFailed: result.itemsFailed,
         duration: result.duration,
@@ -202,7 +199,7 @@ export class ConfigSyncProcessor {
     tenantId: string,
     plenty: PlentyClient,
     shopware: IShopwareClient
-  ): Promise<{ synced: number; errors: number }> {
+  ): Promise<EntitySyncResult> {
     const log = createJobLogger('', tenantId, 'CONFIG');
 
     try {
@@ -210,7 +207,7 @@ export class ConfigSyncProcessor {
 
       if (categories.length === 0) {
         log.info('No categories to sync');
-        return { synced: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0 };
       }
 
       log.info('Starting bulk category sync', { count: categories.length });
@@ -270,7 +267,8 @@ export class ConfigSyncProcessor {
         pl: 'pl-PL',
       };
 
-      let totalSynced = 0;
+      let totalCreated = 0;
+      let totalUpdated = 0;
       let totalErrors = 0;
 
       // Step 4: Process each level in order
@@ -371,8 +369,12 @@ export class ConfigSyncProcessor {
           // Step 6: Update mappings based on results
           if (bulkResult.success) {
             await mappingService.upsertMappings(tenantId, mappingUpdates);
-            totalSynced += levelCategories.length;
-            log.info('Level sync completed successfully', { level, synced: levelCategories.length });
+            // Count creates vs updates
+            const levelCreated = mappingUpdates.filter((m) => m.lastSyncAction === 'create').length;
+            const levelUpdated = mappingUpdates.filter((m) => m.lastSyncAction === 'update').length;
+            totalCreated += levelCreated;
+            totalUpdated += levelUpdated;
+            log.info('Level sync completed successfully', { level, created: levelCreated, updated: levelUpdated });
           } else {
             // Count successes and failures
             const successCount = bulkResult.results.filter((r) => r.success).length;
@@ -384,15 +386,19 @@ export class ConfigSyncProcessor {
               await mappingService.upsertMappings(tenantId, successfulMappings);
             }
 
-            totalSynced += successCount;
+            // Count creates vs updates from successful mappings
+            const levelCreated = successfulMappings.filter((m) => m.lastSyncAction === 'create').length;
+            const levelUpdated = successfulMappings.filter((m) => m.lastSyncAction === 'update').length;
+            totalCreated += levelCreated;
+            totalUpdated += levelUpdated;
             totalErrors += errorCount;
-            log.warn('Level sync completed with errors', { level, synced: successCount, errors: errorCount });
+            log.warn('Level sync completed with errors', { level, created: levelCreated, updated: levelUpdated, errors: errorCount });
           }
         }
       }
 
-      log.info('Bulk category sync completed', { synced: totalSynced, errors: totalErrors });
-      return { synced: totalSynced, errors: totalErrors };
+      log.info('Bulk category sync completed', { created: totalCreated, updated: totalUpdated, errors: totalErrors });
+      return { created: totalCreated, updated: totalUpdated, errors: totalErrors };
     } catch (error) {
       log.error('Failed to sync categories', { error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to sync categories: ${error}`);
@@ -465,7 +471,7 @@ export class ConfigSyncProcessor {
     tenantId: string,
     plenty: PlentyClient,
     shopware: IShopwareClient
-  ): Promise<{ synced: number; errors: number }> {
+  ): Promise<EntitySyncResult> {
     const log = createJobLogger('', tenantId, 'CONFIG');
 
     try {
@@ -473,7 +479,7 @@ export class ConfigSyncProcessor {
 
       if (attributes.length === 0) {
         log.info('No attributes to sync');
-        return { synced: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0 };
       }
 
       log.info('Starting bulk attribute sync', { count: attributes.length });
@@ -623,13 +629,18 @@ export class ConfigSyncProcessor {
       log.info('Executing bulk sync for property groups', { count: propertyGroupPayload.length });
       const groupResult = await shopware.bulkSyncPropertyGroups(propertyGroupPayload);
 
-      let totalSynced = 0;
+      let totalCreated = 0;
+      let totalUpdated = 0;
       let totalErrors = 0;
 
       if (groupResult.success) {
         await mappingService.upsertAttributeMappings(tenantId, attributeMappingUpdates);
-        totalSynced += attributes.length;
-        log.info('Property groups synced successfully', { count: attributes.length });
+        // Count creates vs updates for property groups
+        const groupCreated = attributeMappingUpdates.filter((m) => m.lastSyncAction === 'create').length;
+        const groupUpdated = attributeMappingUpdates.filter((m) => m.lastSyncAction === 'update').length;
+        totalCreated += groupCreated;
+        totalUpdated += groupUpdated;
+        log.info('Property groups synced successfully', { created: groupCreated, updated: groupUpdated });
       } else {
         const successCount = groupResult.results.filter((r) => r.success).length;
         const errorCount = groupResult.results.filter((r) => !r.success).length;
@@ -639,9 +650,13 @@ export class ConfigSyncProcessor {
           await mappingService.upsertAttributeMappings(tenantId, successfulMappings);
         }
 
-        totalSynced += successCount;
+        // Count creates vs updates from successful mappings
+        const groupCreated = successfulMappings.filter((m) => m.lastSyncAction === 'create').length;
+        const groupUpdated = successfulMappings.filter((m) => m.lastSyncAction === 'update').length;
+        totalCreated += groupCreated;
+        totalUpdated += groupUpdated;
         totalErrors += errorCount;
-        log.warn('Property groups sync completed with errors', { synced: successCount, errors: errorCount });
+        log.warn('Property groups sync completed with errors', { created: groupCreated, updated: groupUpdated, errors: errorCount });
       }
 
       // Step 5: Upload images for media-type attribute values
@@ -797,7 +812,12 @@ export class ConfigSyncProcessor {
 
         if (optionResult.success) {
           await mappingService.upsertAttributeValueMappings(tenantId, valueMappingUpdates);
-          log.info('Property options synced successfully', { count: propertyOptionPayload.length });
+          // Count creates vs updates for property options
+          const optionCreated = valueMappingUpdates.filter((m) => m.lastSyncAction === 'create').length;
+          const optionUpdated = valueMappingUpdates.filter((m) => m.lastSyncAction === 'update').length;
+          totalCreated += optionCreated;
+          totalUpdated += optionUpdated;
+          log.info('Property options synced successfully', { created: optionCreated, updated: optionUpdated });
         } else {
           const successCount = optionResult.results.filter((r) => r.success).length;
           const errorCount = optionResult.results.filter((r) => !r.success).length;
@@ -807,13 +827,18 @@ export class ConfigSyncProcessor {
             await mappingService.upsertAttributeValueMappings(tenantId, successfulMappings);
           }
 
+          // Count creates vs updates from successful mappings
+          const optionCreated = successfulMappings.filter((m) => m.lastSyncAction === 'create').length;
+          const optionUpdated = successfulMappings.filter((m) => m.lastSyncAction === 'update').length;
+          totalCreated += optionCreated;
+          totalUpdated += optionUpdated;
           totalErrors += errorCount;
-          log.warn('Property options sync completed with errors', { synced: successCount, errors: errorCount });
+          log.warn('Property options sync completed with errors', { created: optionCreated, updated: optionUpdated, errors: errorCount });
         }
       }
 
-      log.info('Bulk attribute sync completed', { synced: totalSynced, errors: totalErrors });
-      return { synced: totalSynced, errors: totalErrors };
+      log.info('Bulk attribute sync completed', { created: totalCreated, updated: totalUpdated, errors: totalErrors });
+      return { created: totalCreated, updated: totalUpdated, errors: totalErrors };
     } catch (error) {
       log.error('Failed to sync attributes', { error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to sync attributes: ${error}`);
@@ -885,7 +910,7 @@ export class ConfigSyncProcessor {
     tenantId: string,
     plenty: PlentyClient,
     _shopware: IShopwareClient // Unused - kept for interface consistency
-  ): Promise<{ synced: number; errors: number }> {
+  ): Promise<EntitySyncResult> {
     const log = createJobLogger('', tenantId, 'CONFIG');
 
     try {
@@ -893,10 +918,21 @@ export class ConfigSyncProcessor {
 
       if (salesPrices.length === 0) {
         log.info('No sales prices to sync');
-        return { synced: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0 };
       }
 
       log.info('Caching sales prices locally', { count: salesPrices.length });
+
+      // Check which sales prices already exist in cache
+      const existingIds = await this.prisma.plentySalesPrice.findMany({
+        where: { tenantId, id: { in: salesPrices.map((sp) => sp.id) } },
+        select: { id: true },
+      });
+      const existingIdSet = new Set(existingIds.map((e) => e.id));
+
+      // Count creates vs updates
+      const created = salesPrices.filter((sp) => !existingIdSet.has(sp.id)).length;
+      const updated = salesPrices.filter((sp) => existingIdSet.has(sp.id)).length;
 
       // Bulk upsert to local cache
       await this.bulkUpsertSalesPricesToCache(tenantId, salesPrices);
@@ -909,8 +945,8 @@ export class ConfigSyncProcessor {
       }));
       log.info('Available sales price types for configuration', { priceTypes });
 
-      log.info('Sales prices cached successfully', { synced: salesPrices.length });
-      return { synced: salesPrices.length, errors: 0 };
+      log.info('Sales prices cached successfully', { created, updated, errors: 0 });
+      return { created, updated, errors: 0 };
     } catch (error) {
       log.error('Failed to sync sales prices', { error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to sync sales prices: ${error}`);
@@ -993,7 +1029,7 @@ export class ConfigSyncProcessor {
     tenantId: string,
     plenty: PlentyClient,
     shopware: IShopwareClient
-  ): Promise<{ synced: number; errors: number }> {
+  ): Promise<EntitySyncResult> {
     const log = createJobLogger('', tenantId, 'CONFIG');
 
     try {
@@ -1001,7 +1037,7 @@ export class ConfigSyncProcessor {
 
       if (manufacturers.length === 0) {
         log.info('No manufacturers to sync');
-        return { synced: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0 };
       }
 
       log.info('Starting bulk manufacturer sync', { count: manufacturers.length });
@@ -1099,11 +1135,13 @@ export class ConfigSyncProcessor {
       // Step 6: Update mappings based on results
       if (bulkResult.success) {
         await mappingService.upsertMappings(tenantId, mappingUpdates);
-        log.info('Bulk manufacturer sync completed successfully', { synced: manufacturers.length });
-        return { synced: manufacturers.length, errors: 0 };
+        // Count creates vs updates
+        const created = mappingUpdates.filter((m) => m.lastSyncAction === 'create').length;
+        const updated = mappingUpdates.filter((m) => m.lastSyncAction === 'update').length;
+        log.info('Bulk manufacturer sync completed successfully', { created, updated });
+        return { created, updated, errors: 0 };
       } else {
         // Count successes and failures from individual results
-        const successCount = bulkResult.results.filter((r) => r.success).length;
         const errorCount = bulkResult.results.filter((r) => !r.success).length;
 
         // Only update mappings for successful items
@@ -1112,8 +1150,11 @@ export class ConfigSyncProcessor {
           await mappingService.upsertMappings(tenantId, successfulMappings);
         }
 
-        log.warn('Bulk manufacturer sync completed with errors', { synced: successCount, errors: errorCount });
-        return { synced: successCount, errors: errorCount };
+        // Count creates vs updates from successful mappings
+        const created = successfulMappings.filter((m) => m.lastSyncAction === 'create').length;
+        const updated = successfulMappings.filter((m) => m.lastSyncAction === 'update').length;
+        log.warn('Bulk manufacturer sync completed with errors', { created, updated, errors: errorCount });
+        return { created, updated, errors: errorCount };
       }
     } catch (error) {
       log.error('Failed to sync manufacturers', { error: error instanceof Error ? error.message : String(error) });
@@ -1352,7 +1393,7 @@ export class ConfigSyncProcessor {
     tenantId: string,
     plenty: PlentyClient,
     shopware: IShopwareClient
-  ): Promise<{ synced: number; errors: number }> {
+  ): Promise<EntitySyncResult> {
     const log = createJobLogger('', tenantId, 'CONFIG');
 
     try {
@@ -1360,7 +1401,7 @@ export class ConfigSyncProcessor {
 
       if (units.length === 0) {
         log.info('No units to sync');
-        return { synced: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0 };
       }
 
       log.info('Starting bulk unit sync', { count: units.length });
@@ -1458,11 +1499,13 @@ export class ConfigSyncProcessor {
       // Step 5: Update mappings based on results
       if (bulkResult.success) {
         await mappingService.upsertMappings(tenantId, mappingUpdates);
-        log.info('Bulk unit sync completed successfully', { synced: units.length });
-        return { synced: units.length, errors: 0 };
+        // Count creates vs updates
+        const created = mappingUpdates.filter((m) => m.lastSyncAction === 'create').length;
+        const updated = mappingUpdates.filter((m) => m.lastSyncAction === 'update').length;
+        log.info('Bulk unit sync completed successfully', { created, updated });
+        return { created, updated, errors: 0 };
       } else {
         // Count successes and failures from individual results
-        const successCount = bulkResult.results.filter((r) => r.success).length;
         const errorCount = bulkResult.results.filter((r) => !r.success).length;
 
         // Only update mappings for successful items
@@ -1471,8 +1514,11 @@ export class ConfigSyncProcessor {
           await mappingService.upsertMappings(tenantId, successfulMappings);
         }
 
-        log.warn('Bulk unit sync completed with errors', { synced: successCount, errors: errorCount });
-        return { synced: successCount, errors: errorCount };
+        // Count creates vs updates from successful mappings
+        const created = successfulMappings.filter((m) => m.lastSyncAction === 'create').length;
+        const updated = successfulMappings.filter((m) => m.lastSyncAction === 'update').length;
+        log.warn('Bulk unit sync completed with errors', { created, updated, errors: errorCount });
+        return { created, updated, errors: errorCount };
       }
     } catch (error) {
       log.error('Failed to sync units', { error: error instanceof Error ? error.message : String(error) });
@@ -1532,7 +1578,7 @@ export class ConfigSyncProcessor {
     tenantId: string,
     plenty: PlentyClient,
     shopware: IShopwareClient
-  ): Promise<{ synced: number; errors: number }> {
+  ): Promise<EntitySyncResult> {
     const log = createJobLogger('', tenantId, 'CONFIG');
 
     try {
@@ -1550,7 +1596,7 @@ export class ConfigSyncProcessor {
 
       if (allProperties.length === 0) {
         log.info('No properties to sync');
-        return { synced: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0 };
       }
 
       // Filter properties based on referrers and clients
@@ -1565,7 +1611,7 @@ export class ConfigSyncProcessor {
 
       if (properties.length === 0) {
         log.info('No properties match filter criteria');
-        return { synced: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0 };
       }
 
       log.info('Starting bulk property sync', { count: properties.length });
@@ -1702,15 +1748,19 @@ export class ConfigSyncProcessor {
       log.info('Executing bulk sync for property groups', { count: propertyGroupPayload.length });
       const groupResult = await shopware.bulkSyncPropertyGroups(propertyGroupPayload);
 
-      let totalSynced = 0;
+      let totalCreated = 0;
+      let totalUpdated = 0;
       let totalErrors = 0;
 
       if (groupResult.success) {
         await mappingService.upsertPropertyMappings(tenantId, propertyMappingUpdates);
-        totalSynced += properties.length;
-        log.info('Property groups synced successfully', { count: properties.length });
+        // Count creates vs updates for property groups
+        const groupCreated = propertyMappingUpdates.filter((m) => m.lastSyncAction === 'create').length;
+        const groupUpdated = propertyMappingUpdates.filter((m) => m.lastSyncAction === 'update').length;
+        totalCreated += groupCreated;
+        totalUpdated += groupUpdated;
+        log.info('Property groups synced successfully', { created: groupCreated, updated: groupUpdated });
       } else {
-        const successCount = groupResult.results.filter((r) => r.success).length;
         const errorCount = groupResult.results.filter((r) => !r.success).length;
 
         const successfulMappings = propertyMappingUpdates.filter((_, index) => groupResult.results[index]?.success);
@@ -1718,9 +1768,13 @@ export class ConfigSyncProcessor {
           await mappingService.upsertPropertyMappings(tenantId, successfulMappings);
         }
 
-        totalSynced += successCount;
+        // Count creates vs updates from successful mappings
+        const groupCreated = successfulMappings.filter((m) => m.lastSyncAction === 'create').length;
+        const groupUpdated = successfulMappings.filter((m) => m.lastSyncAction === 'update').length;
+        totalCreated += groupCreated;
+        totalUpdated += groupUpdated;
         totalErrors += errorCount;
-        log.warn('Property groups sync completed with errors', { synced: successCount, errors: errorCount });
+        log.warn('Property groups sync completed with errors', { created: groupCreated, updated: groupUpdated, errors: errorCount });
       }
 
       // Step 5: Prepare bulk payload for property options (from selections)
@@ -1798,9 +1852,13 @@ export class ConfigSyncProcessor {
 
         if (optionResult.success) {
           await mappingService.upsertPropertySelectionMappings(tenantId, selectionMappingUpdates);
-          log.info('Property options synced successfully', { count: propertyOptionPayload.length });
+          // Count creates vs updates for property options
+          const optionCreated = selectionMappingUpdates.filter((m) => m.lastSyncAction === 'create').length;
+          const optionUpdated = selectionMappingUpdates.filter((m) => m.lastSyncAction === 'update').length;
+          totalCreated += optionCreated;
+          totalUpdated += optionUpdated;
+          log.info('Property options synced successfully', { created: optionCreated, updated: optionUpdated });
         } else {
-          const successCount = optionResult.results.filter((r) => r.success).length;
           const errorCount = optionResult.results.filter((r) => !r.success).length;
 
           const successfulMappings = selectionMappingUpdates.filter((_, index) => optionResult.results[index]?.success);
@@ -1808,13 +1866,18 @@ export class ConfigSyncProcessor {
             await mappingService.upsertPropertySelectionMappings(tenantId, successfulMappings);
           }
 
+          // Count creates vs updates from successful mappings
+          const optionCreated = successfulMappings.filter((m) => m.lastSyncAction === 'create').length;
+          const optionUpdated = successfulMappings.filter((m) => m.lastSyncAction === 'update').length;
+          totalCreated += optionCreated;
+          totalUpdated += optionUpdated;
           totalErrors += errorCount;
-          log.warn('Property options sync completed with errors', { synced: successCount, errors: errorCount });
+          log.warn('Property options sync completed with errors', { created: optionCreated, updated: optionUpdated, errors: errorCount });
         }
       }
 
-      log.info('Bulk property sync completed', { synced: totalSynced, errors: totalErrors });
-      return { synced: totalSynced, errors: totalErrors };
+      log.info('Bulk property sync completed', { created: totalCreated, updated: totalUpdated, errors: totalErrors });
+      return { created: totalCreated, updated: totalUpdated, errors: totalErrors };
     } catch (error) {
       log.error('Failed to sync properties', { error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to sync properties: ${error}`);
