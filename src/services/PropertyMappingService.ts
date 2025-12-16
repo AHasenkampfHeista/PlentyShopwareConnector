@@ -1,4 +1,4 @@
-import { PrismaClient, MappingType } from '@prisma/client';
+import { PrismaClient, MappingType, MappingStatus } from '@prisma/client';
 import { getPrismaClient } from '../database/client';
 import { createLogger } from '../utils/logger';
 
@@ -119,6 +119,8 @@ export class PropertyMappingService {
 
     this.log.debug('Upserting property mappings', { tenantId, count: records.length });
 
+    const now = new Date();
+
     await this.prisma.$transaction(
       records.map((record) =>
         this.prisma.propertyMapping.upsert({
@@ -134,15 +136,19 @@ export class PropertyMappingService {
             plentyPropertyGroupId: record.plentyPropertyGroupId,
             shopwarePropertyGroupId: record.shopwarePropertyGroupId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
           update: {
             plentyPropertyGroupId: record.plentyPropertyGroupId,
             shopwarePropertyGroupId: record.shopwarePropertyGroupId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
         })
       )
@@ -305,6 +311,8 @@ export class PropertyMappingService {
 
     this.log.debug('Upserting property selection mappings', { tenantId, count: records.length });
 
+    const now = new Date();
+
     await this.prisma.$transaction(
       records.map((record) =>
         this.prisma.propertySelectionMapping.upsert({
@@ -321,15 +329,19 @@ export class PropertyMappingService {
             shopwarePropertyGroupId: record.shopwarePropertyGroupId,
             shopwarePropertyOptionId: record.shopwarePropertyOptionId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
           update: {
             shopwarePropertyGroupId: record.shopwarePropertyGroupId,
             shopwarePropertyOptionId: record.shopwarePropertyOptionId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
         })
       )
@@ -467,5 +479,106 @@ export class PropertyMappingService {
       mappingType: m.mappingType,
       lastSyncAction: m.lastSyncAction as 'create' | 'update',
     }));
+  }
+
+  // ============================================
+  // ORPHAN DETECTION METHODS
+  // ============================================
+
+  /**
+   * Get all ACTIVE property mappings for a tenant (for orphan detection)
+   */
+  async getAllActivePropertyMappings(tenantId: string): Promise<number[]> {
+    const mappings = await this.prisma.propertyMapping.findMany({
+      where: {
+        tenantId,
+        status: MappingStatus.ACTIVE,
+      },
+      select: {
+        plentyPropertyId: true,
+      },
+    });
+
+    return mappings.map((m) => m.plentyPropertyId);
+  }
+
+  /**
+   * Get all ACTIVE property selection mappings for a tenant (for orphan detection)
+   */
+  async getAllActivePropertySelectionMappings(tenantId: string): Promise<number[]> {
+    const mappings = await this.prisma.propertySelectionMapping.findMany({
+      where: {
+        tenantId,
+        status: MappingStatus.ACTIVE,
+      },
+      select: {
+        plentySelectionId: true,
+      },
+    });
+
+    return mappings.map((m) => m.plentySelectionId);
+  }
+
+  /**
+   * Mark property mappings as orphaned (no longer exist in Plenty)
+   */
+  async markPropertiesAsOrphaned(tenantId: string, plentyIds: number[]): Promise<number> {
+    if (plentyIds.length === 0) {
+      return 0;
+    }
+
+    const result = await this.prisma.propertyMapping.updateMany({
+      where: {
+        tenantId,
+        plentyPropertyId: {
+          in: plentyIds,
+        },
+        status: MappingStatus.ACTIVE,
+      },
+      data: {
+        status: MappingStatus.ORPHANED,
+      },
+    });
+
+    if (result.count > 0) {
+      this.log.info('Marked property mappings as orphaned', {
+        tenantId,
+        count: result.count,
+        plentyIds,
+      });
+    }
+
+    return result.count;
+  }
+
+  /**
+   * Mark property selection mappings as orphaned (no longer exist in Plenty)
+   */
+  async markPropertySelectionsAsOrphaned(tenantId: string, plentySelectionIds: number[]): Promise<number> {
+    if (plentySelectionIds.length === 0) {
+      return 0;
+    }
+
+    const result = await this.prisma.propertySelectionMapping.updateMany({
+      where: {
+        tenantId,
+        plentySelectionId: {
+          in: plentySelectionIds,
+        },
+        status: MappingStatus.ACTIVE,
+      },
+      data: {
+        status: MappingStatus.ORPHANED,
+      },
+    });
+
+    if (result.count > 0) {
+      this.log.info('Marked property selection mappings as orphaned', {
+        tenantId,
+        count: result.count,
+      });
+    }
+
+    return result.count;
   }
 }

@@ -70,6 +70,7 @@ export interface EntitySyncResult {
   created: number; // New items created in Shopware
   updated: number; // Existing items updated in Shopware
   errors: number; // Items that failed to sync
+  orphaned: number; // Items no longer in Plenty but still mapped to Shopware
 }
 
 export interface ConfigSyncResult {
@@ -79,6 +80,7 @@ export interface ConfigSyncResult {
   itemsCreated: number; // Total items created (new in Shopware)
   itemsUpdated: number; // Total items updated (existing in Shopware)
   itemsFailed: number; // Total items that failed
+  itemsOrphaned: number; // Total items no longer in Plenty but still in Shopware
   duration: number; // Total duration in milliseconds
 
   // Per-entity-type breakdown for detailed view

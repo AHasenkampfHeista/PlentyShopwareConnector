@@ -1,4 +1,4 @@
-import { PrismaClient, MappingType } from '@prisma/client';
+import { PrismaClient, MappingType, MappingStatus } from '@prisma/client';
 import { getPrismaClient } from '../database/client';
 import { createLogger } from '../utils/logger';
 
@@ -84,6 +84,8 @@ export class UnitMappingService {
 
     this.log.debug('Upserting unit mappings', { tenantId, count: records.length });
 
+    const now = new Date();
+
     // Use transaction to ensure all mappings are saved together
     await this.prisma.$transaction(
       records.map((record) =>
@@ -99,14 +101,18 @@ export class UnitMappingService {
             plentyUnitId: record.plentyUnitId,
             shopwareUnitId: record.shopwareUnitId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
           update: {
             shopwareUnitId: record.shopwareUnitId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
         })
       )
@@ -201,5 +207,54 @@ export class UnitMappingService {
       mappingType: m.mappingType,
       lastSyncAction: m.lastSyncAction as 'create' | 'update',
     }));
+  }
+
+  /**
+   * Get all ACTIVE mappings for a tenant (for orphan detection)
+   */
+  async getAllActiveMappings(tenantId: string): Promise<number[]> {
+    const mappings = await this.prisma.unitMapping.findMany({
+      where: {
+        tenantId,
+        status: MappingStatus.ACTIVE,
+      },
+      select: {
+        plentyUnitId: true,
+      },
+    });
+
+    return mappings.map((m) => m.plentyUnitId);
+  }
+
+  /**
+   * Mark mappings as orphaned (no longer exist in Plenty)
+   */
+  async markAsOrphaned(tenantId: string, plentyIds: number[]): Promise<number> {
+    if (plentyIds.length === 0) {
+      return 0;
+    }
+
+    const result = await this.prisma.unitMapping.updateMany({
+      where: {
+        tenantId,
+        plentyUnitId: {
+          in: plentyIds,
+        },
+        status: MappingStatus.ACTIVE,
+      },
+      data: {
+        status: MappingStatus.ORPHANED,
+      },
+    });
+
+    if (result.count > 0) {
+      this.log.info('Marked unit mappings as orphaned', {
+        tenantId,
+        count: result.count,
+        plentyIds,
+      });
+    }
+
+    return result.count;
   }
 }

@@ -134,6 +134,11 @@ enum MappingType {
   AUTO    // Created automatically during sync
 }
 
+enum MappingStatus {
+  ACTIVE    // Normal, exists in both systems
+  ORPHANED  // No longer exists in Plenty, still in Shopware
+}
+
 // ============================================
 // SYNC JOBS
 // ============================================
@@ -482,28 +487,31 @@ model ProductMapping {
 // ============================================
 
 model CategoryMapping {
-  id                 String      @id @default(uuid())
-  tenantId           String      @map("tenant_id")
-  tenant             Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                 String        @id @default(uuid())
+  tenantId           String        @map("tenant_id")
+  tenant             Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // PlentyMarkets identifiers
-  plentyCategoryId   Int         @map("plenty_category_id")
+  plentyCategoryId   Int           @map("plenty_category_id")
 
   // Shopware identifiers
-  shopwareCategoryId String      @map("shopware_category_id")
+  shopwareCategoryId String        @map("shopware_category_id")
 
   // Mapping metadata
-  mappingType        MappingType @map("mapping_type")
-  lastSyncedAt       DateTime    @map("last_synced_at")
-  lastSyncAction     String      @map("last_sync_action") // 'create', 'update'
+  mappingType        MappingType   @map("mapping_type")
+  status             MappingStatus @default(ACTIVE) @map("status")
+  lastSyncedAt       DateTime      @map("last_synced_at")
+  lastSeenAt         DateTime?     @map("last_seen_at")
+  lastSyncAction     String        @map("last_sync_action") // 'create', 'update'
 
   // Timestamps
-  createdAt          DateTime    @default(now()) @map("created_at")
-  updatedAt          DateTime    @updatedAt @map("updated_at")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
 
   @@unique([tenantId, plentyCategoryId])
   @@unique([tenantId, shopwareCategoryId])
   @@index([tenantId, mappingType])
+  @@index([tenantId, status])
   @@map("category_mappings")
 }
 
@@ -543,57 +551,63 @@ model MockShopwareCategory {
 // ============================================
 
 model AttributeMapping {
-  id                     String      @id @default(uuid())
-  tenantId               String      @map("tenant_id")
-  tenant                 Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                      String        @id @default(uuid())
+  tenantId                String        @map("tenant_id")
+  tenant                  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // PlentyMarkets identifiers
-  plentyAttributeId      Int         @map("plenty_attribute_id")
+  plentyAttributeId       Int           @map("plenty_attribute_id")
 
   // Shopware identifiers
-  shopwarePropertyGroupId String     @map("shopware_property_group_id")
+  shopwarePropertyGroupId String        @map("shopware_property_group_id")
 
   // Mapping metadata
-  mappingType            MappingType @map("mapping_type")
-  lastSyncedAt           DateTime    @map("last_synced_at")
-  lastSyncAction         String      @map("last_sync_action") // 'create', 'update'
+  mappingType             MappingType   @map("mapping_type")
+  status                  MappingStatus @default(ACTIVE) @map("status")
+  lastSyncedAt            DateTime      @map("last_synced_at")
+  lastSeenAt              DateTime?     @map("last_seen_at")
+  lastSyncAction          String        @map("last_sync_action") // 'create', 'update'
 
   // Timestamps
-  createdAt              DateTime    @default(now()) @map("created_at")
-  updatedAt              DateTime    @updatedAt @map("updated_at")
+  createdAt               DateTime      @default(now()) @map("created_at")
+  updatedAt               DateTime      @updatedAt @map("updated_at")
 
   @@unique([tenantId, plentyAttributeId])
   @@unique([tenantId, shopwarePropertyGroupId])
   @@index([tenantId, mappingType])
+  @@index([tenantId, status])
   @@map("attribute_mappings")
 }
 
 model AttributeValueMapping {
-  id                       String      @id @default(uuid())
-  tenantId                 String      @map("tenant_id")
-  tenant                   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                       String        @id @default(uuid())
+  tenantId                 String        @map("tenant_id")
+  tenant                   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // PlentyMarkets identifiers
-  plentyAttributeId        Int         @map("plenty_attribute_id")
-  plentyAttributeValueId   Int         @map("plenty_attribute_value_id")
+  plentyAttributeId        Int           @map("plenty_attribute_id")
+  plentyAttributeValueId   Int           @map("plenty_attribute_value_id")
 
   // Shopware identifiers
-  shopwarePropertyGroupId  String      @map("shopware_property_group_id")
-  shopwarePropertyOptionId String      @map("shopware_property_option_id")
+  shopwarePropertyGroupId  String        @map("shopware_property_group_id")
+  shopwarePropertyOptionId String        @map("shopware_property_option_id")
 
   // Mapping metadata
-  mappingType              MappingType @map("mapping_type")
-  lastSyncedAt             DateTime    @map("last_synced_at")
-  lastSyncAction           String      @map("last_sync_action") // 'create', 'update'
+  mappingType              MappingType   @map("mapping_type")
+  status                   MappingStatus @default(ACTIVE) @map("status")
+  lastSyncedAt             DateTime      @map("last_synced_at")
+  lastSeenAt               DateTime?     @map("last_seen_at")
+  lastSyncAction           String        @map("last_sync_action") // 'create', 'update'
 
   // Timestamps
-  createdAt                DateTime    @default(now()) @map("created_at")
-  updatedAt                DateTime    @updatedAt @map("updated_at")
+  createdAt                DateTime      @default(now()) @map("created_at")
+  updatedAt                DateTime      @updatedAt @map("updated_at")
 
   @@unique([tenantId, plentyAttributeValueId])
   @@unique([tenantId, shopwarePropertyOptionId])
   @@index([tenantId, plentyAttributeId])
   @@index([tenantId, mappingType])
+  @@index([tenantId, status])
   @@map("attribute_value_mappings")
 }
 
@@ -602,58 +616,64 @@ model AttributeValueMapping {
 // ============================================
 
 model PropertyMapping {
-  id                     String      @id @default(uuid())
-  tenantId               String      @map("tenant_id")
-  tenant                 Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                      String        @id @default(uuid())
+  tenantId                String        @map("tenant_id")
+  tenant                  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // PlentyMarkets identifiers
-  plentyPropertyId       Int         @map("plenty_property_id")
-  plentyPropertyGroupId  Int?        @map("plenty_property_group_id")
+  plentyPropertyId        Int           @map("plenty_property_id")
+  plentyPropertyGroupId   Int?          @map("plenty_property_group_id")
 
   // Shopware identifiers
-  shopwarePropertyGroupId String     @map("shopware_property_group_id")
+  shopwarePropertyGroupId String        @map("shopware_property_group_id")
 
   // Mapping metadata
-  mappingType            MappingType @map("mapping_type")
-  lastSyncedAt           DateTime    @map("last_synced_at")
-  lastSyncAction         String      @map("last_sync_action") // 'create', 'update'
+  mappingType             MappingType   @map("mapping_type")
+  status                  MappingStatus @default(ACTIVE) @map("status")
+  lastSyncedAt            DateTime      @map("last_synced_at")
+  lastSeenAt              DateTime?     @map("last_seen_at")
+  lastSyncAction          String        @map("last_sync_action") // 'create', 'update'
 
   // Timestamps
-  createdAt              DateTime    @default(now()) @map("created_at")
-  updatedAt              DateTime    @updatedAt @map("updated_at")
+  createdAt               DateTime      @default(now()) @map("created_at")
+  updatedAt               DateTime      @updatedAt @map("updated_at")
 
   @@unique([tenantId, plentyPropertyId])
   @@index([tenantId, plentyPropertyGroupId])
   @@index([tenantId, mappingType])
+  @@index([tenantId, status])
   @@map("property_mappings")
 }
 
 model PropertySelectionMapping {
-  id                       String      @id @default(uuid())
-  tenantId                 String      @map("tenant_id")
-  tenant                   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                       String        @id @default(uuid())
+  tenantId                 String        @map("tenant_id")
+  tenant                   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // PlentyMarkets identifiers
-  plentyPropertyId         Int         @map("plenty_property_id")
-  plentySelectionId        Int         @map("plenty_selection_id")
+  plentyPropertyId         Int           @map("plenty_property_id")
+  plentySelectionId        Int           @map("plenty_selection_id")
 
   // Shopware identifiers
-  shopwarePropertyGroupId  String      @map("shopware_property_group_id")
-  shopwarePropertyOptionId String      @map("shopware_property_option_id")
+  shopwarePropertyGroupId  String        @map("shopware_property_group_id")
+  shopwarePropertyOptionId String        @map("shopware_property_option_id")
 
   // Mapping metadata
-  mappingType              MappingType @map("mapping_type")
-  lastSyncedAt             DateTime    @map("last_synced_at")
-  lastSyncAction           String      @map("last_sync_action") // 'create', 'update'
+  mappingType              MappingType   @map("mapping_type")
+  status                   MappingStatus @default(ACTIVE) @map("status")
+  lastSyncedAt             DateTime      @map("last_synced_at")
+  lastSeenAt               DateTime?     @map("last_seen_at")
+  lastSyncAction           String        @map("last_sync_action") // 'create', 'update'
 
   // Timestamps
-  createdAt                DateTime    @default(now()) @map("created_at")
-  updatedAt                DateTime    @updatedAt @map("updated_at")
+  createdAt                DateTime      @default(now()) @map("created_at")
+  updatedAt                DateTime      @updatedAt @map("updated_at")
 
   @@unique([tenantId, plentySelectionId])
   @@unique([tenantId, shopwarePropertyOptionId])
   @@index([tenantId, plentyPropertyId])
   @@index([tenantId, mappingType])
+  @@index([tenantId, status])
   @@map("property_selection_mappings")
 }
 
@@ -800,28 +820,31 @@ model MockShopwarePrice {
 // ============================================
 
 model ManufacturerMapping {
-  id                       String      @id @default(uuid())
-  tenantId                 String      @map("tenant_id")
-  tenant                   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                       String        @id @default(uuid())
+  tenantId                 String        @map("tenant_id")
+  tenant                   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // PlentyMarkets identifiers
-  plentyManufacturerId     Int         @map("plenty_manufacturer_id")
+  plentyManufacturerId     Int           @map("plenty_manufacturer_id")
 
   // Shopware identifiers
-  shopwareManufacturerId   String      @map("shopware_manufacturer_id")
+  shopwareManufacturerId   String        @map("shopware_manufacturer_id")
 
   // Mapping metadata
-  mappingType              MappingType @map("mapping_type")
-  lastSyncedAt             DateTime    @map("last_synced_at")
-  lastSyncAction           String      @map("last_sync_action") // 'create', 'update'
+  mappingType              MappingType   @map("mapping_type")
+  status                   MappingStatus @default(ACTIVE) @map("status")
+  lastSyncedAt             DateTime      @map("last_synced_at")
+  lastSeenAt               DateTime?     @map("last_seen_at")
+  lastSyncAction           String        @map("last_sync_action") // 'create', 'update'
 
   // Timestamps
-  createdAt                DateTime    @default(now()) @map("created_at")
-  updatedAt                DateTime    @updatedAt @map("updated_at")
+  createdAt                DateTime      @default(now()) @map("created_at")
+  updatedAt                DateTime      @updatedAt @map("updated_at")
 
   @@unique([tenantId, plentyManufacturerId])
   @@unique([tenantId, shopwareManufacturerId])
   @@index([tenantId, mappingType])
+  @@index([tenantId, status])
   @@map("manufacturer_mappings")
 }
 
@@ -863,28 +886,31 @@ model MockShopwareManufacturer {
 // ============================================
 
 model UnitMapping {
-  id                    String      @id @default(uuid())
-  tenantId              String      @map("tenant_id")
-  tenant                Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                    String        @id @default(uuid())
+  tenantId              String        @map("tenant_id")
+  tenant                Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // PlentyMarkets identifiers
-  plentyUnitId          Int         @map("plenty_unit_id")
+  plentyUnitId          Int           @map("plenty_unit_id")
 
   // Shopware identifiers
-  shopwareUnitId        String      @map("shopware_unit_id")
+  shopwareUnitId        String        @map("shopware_unit_id")
 
   // Mapping metadata
-  mappingType           MappingType @map("mapping_type")
-  lastSyncedAt          DateTime    @map("last_synced_at")
-  lastSyncAction        String      @map("last_sync_action") // 'create', 'update'
+  mappingType           MappingType   @map("mapping_type")
+  status                MappingStatus @default(ACTIVE) @map("status")
+  lastSyncedAt          DateTime      @map("last_synced_at")
+  lastSeenAt            DateTime?     @map("last_seen_at")
+  lastSyncAction        String        @map("last_sync_action") // 'create', 'update'
 
   // Timestamps
-  createdAt             DateTime    @default(now()) @map("created_at")
-  updatedAt             DateTime    @updatedAt @map("updated_at")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
 
   @@unique([tenantId, plentyUnitId])
   @@unique([tenantId, shopwareUnitId])
   @@index([tenantId, mappingType])
+  @@index([tenantId, status])
   @@map("unit_mappings")
 }
 

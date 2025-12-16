@@ -53,14 +53,15 @@ export class ConfigSyncProcessor {
       itemsCreated: 0,
       itemsUpdated: 0,
       itemsFailed: 0,
+      itemsOrphaned: 0,
       duration: 0,
-      // Per-entity breakdown with created/updated/errors
-      categories: { created: 0, updated: 0, errors: 0 },
-      attributes: { created: 0, updated: 0, errors: 0 },
-      salesPrices: { created: 0, updated: 0, errors: 0 },
-      manufacturers: { created: 0, updated: 0, errors: 0 },
-      units: { created: 0, updated: 0, errors: 0 },
-      properties: { created: 0, updated: 0, errors: 0 },
+      // Per-entity breakdown with created/updated/errors/orphaned
+      categories: { created: 0, updated: 0, errors: 0, orphaned: 0 },
+      attributes: { created: 0, updated: 0, errors: 0, orphaned: 0 },
+      salesPrices: { created: 0, updated: 0, errors: 0, orphaned: 0 },
+      manufacturers: { created: 0, updated: 0, errors: 0, orphaned: 0 },
+      units: { created: 0, updated: 0, errors: 0, orphaned: 0 },
+      properties: { created: 0, updated: 0, errors: 0, orphaned: 0 },
     };
 
     try {
@@ -138,6 +139,7 @@ export class ConfigSyncProcessor {
       result.itemsCreated = allResults.reduce((sum, r) => sum + r.created, 0);
       result.itemsUpdated = allResults.reduce((sum, r) => sum + r.updated, 0);
       result.itemsFailed = allResults.reduce((sum, r) => sum + r.errors, 0);
+      result.itemsOrphaned = allResults.reduce((sum, r) => sum + r.orphaned, 0);
       result.success = result.itemsFailed === 0;
       result.duration = Date.now() - startTime;
 
@@ -147,6 +149,7 @@ export class ConfigSyncProcessor {
         itemsCreated: result.itemsCreated,
         itemsUpdated: result.itemsUpdated,
         itemsFailed: result.itemsFailed,
+        itemsOrphaned: result.itemsOrphaned,
         categories: result.categories,
         attributes: result.attributes,
         salesPrices: result.salesPrices,
@@ -161,6 +164,7 @@ export class ConfigSyncProcessor {
         itemsCreated: result.itemsCreated,
         itemsUpdated: result.itemsUpdated,
         itemsFailed: result.itemsFailed,
+        itemsOrphaned: result.itemsOrphaned,
         duration: result.duration,
         categories: result.categories,
         attributes: result.attributes,
@@ -207,7 +211,7 @@ export class ConfigSyncProcessor {
 
       if (categories.length === 0) {
         log.info('No categories to sync');
-        return { created: 0, updated: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0, orphaned: 0 };
       }
 
       log.info('Starting bulk category sync', { count: categories.length });
@@ -397,8 +401,22 @@ export class ConfigSyncProcessor {
         }
       }
 
-      log.info('Bulk category sync completed', { created: totalCreated, updated: totalUpdated, errors: totalErrors });
-      return { created: totalCreated, updated: totalUpdated, errors: totalErrors };
+      // Step 7: Orphan detection
+      // Get all active mappings and compare with fetched Plenty category IDs
+      const fetchedPlentyIds = new Set(categories.map((c) => c.id));
+      const activeMappingIds = await mappingService.getAllActiveMappings(tenantId);
+
+      // Find mappings that are no longer in Plenty
+      const orphanedIds = activeMappingIds.filter((id) => !fetchedPlentyIds.has(id));
+      let totalOrphaned = 0;
+
+      if (orphanedIds.length > 0) {
+        totalOrphaned = await mappingService.markAsOrphaned(tenantId, orphanedIds);
+        log.info('Detected orphaned categories', { count: totalOrphaned, orphanedIds });
+      }
+
+      log.info('Bulk category sync completed', { created: totalCreated, updated: totalUpdated, errors: totalErrors, orphaned: totalOrphaned });
+      return { created: totalCreated, updated: totalUpdated, errors: totalErrors, orphaned: totalOrphaned };
     } catch (error) {
       log.error('Failed to sync categories', { error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to sync categories: ${error}`);
@@ -479,7 +497,7 @@ export class ConfigSyncProcessor {
 
       if (attributes.length === 0) {
         log.info('No attributes to sync');
-        return { created: 0, updated: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0, orphaned: 0 };
       }
 
       log.info('Starting bulk attribute sync', { count: attributes.length });
@@ -837,8 +855,41 @@ export class ConfigSyncProcessor {
         }
       }
 
-      log.info('Bulk attribute sync completed', { created: totalCreated, updated: totalUpdated, errors: totalErrors });
-      return { created: totalCreated, updated: totalUpdated, errors: totalErrors };
+      // Step 8: Orphan detection for both attributes and attribute values
+      // Get all fetched Plenty attribute IDs and attribute value IDs
+      const fetchedAttributeIds = new Set(attributes.map((a) => a.id));
+      const fetchedValueIds = new Set<number>();
+      for (const attribute of attributes) {
+        const values = attribute.values || attribute.attributeValues || [];
+        for (const value of values) {
+          fetchedValueIds.add(value.id);
+        }
+      }
+
+      // Get active mappings
+      const activeAttributeIds = await mappingService.getAllActiveAttributeMappings(tenantId);
+      const activeValueIds = await mappingService.getAllActiveAttributeValueMappings(tenantId);
+
+      // Find orphaned attributes
+      const orphanedAttributeIds = activeAttributeIds.filter((id) => !fetchedAttributeIds.has(id));
+      let orphanedAttributes = 0;
+      if (orphanedAttributeIds.length > 0) {
+        orphanedAttributes = await mappingService.markAttributesAsOrphaned(tenantId, orphanedAttributeIds);
+        log.info('Detected orphaned attributes', { count: orphanedAttributes, orphanedIds: orphanedAttributeIds });
+      }
+
+      // Find orphaned attribute values
+      const orphanedValueIds = activeValueIds.filter((id) => !fetchedValueIds.has(id));
+      let orphanedValues = 0;
+      if (orphanedValueIds.length > 0) {
+        orphanedValues = await mappingService.markAttributeValuesAsOrphaned(tenantId, orphanedValueIds);
+        log.info('Detected orphaned attribute values', { count: orphanedValues });
+      }
+
+      const totalOrphaned = orphanedAttributes + orphanedValues;
+
+      log.info('Bulk attribute sync completed', { created: totalCreated, updated: totalUpdated, errors: totalErrors, orphaned: totalOrphaned });
+      return { created: totalCreated, updated: totalUpdated, errors: totalErrors, orphaned: totalOrphaned };
     } catch (error) {
       log.error('Failed to sync attributes', { error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to sync attributes: ${error}`);
@@ -918,7 +969,7 @@ export class ConfigSyncProcessor {
 
       if (salesPrices.length === 0) {
         log.info('No sales prices to sync');
-        return { created: 0, updated: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0, orphaned: 0 };
       }
 
       log.info('Caching sales prices locally', { count: salesPrices.length });
@@ -945,8 +996,9 @@ export class ConfigSyncProcessor {
       }));
       log.info('Available sales price types for configuration', { priceTypes });
 
-      log.info('Sales prices cached successfully', { created, updated, errors: 0 });
-      return { created, updated, errors: 0 };
+      // No orphan detection for sales prices - they're only cached locally, not synced to Shopware
+      log.info('Sales prices cached successfully', { created, updated, errors: 0, orphaned: 0 });
+      return { created, updated, errors: 0, orphaned: 0 };
     } catch (error) {
       log.error('Failed to sync sales prices', { error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to sync sales prices: ${error}`);
@@ -1037,7 +1089,7 @@ export class ConfigSyncProcessor {
 
       if (manufacturers.length === 0) {
         log.info('No manufacturers to sync');
-        return { created: 0, updated: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0, orphaned: 0 };
       }
 
       log.info('Starting bulk manufacturer sync', { count: manufacturers.length });
@@ -1133,16 +1185,16 @@ export class ConfigSyncProcessor {
       const bulkResult = await shopware.bulkSyncManufacturers(bulkPayload);
 
       // Step 6: Update mappings based on results
+      let totalCreated = 0;
+      let totalUpdated = 0;
+      let totalErrors = 0;
+
       if (bulkResult.success) {
         await mappingService.upsertMappings(tenantId, mappingUpdates);
-        // Count creates vs updates
-        const created = mappingUpdates.filter((m) => m.lastSyncAction === 'create').length;
-        const updated = mappingUpdates.filter((m) => m.lastSyncAction === 'update').length;
-        log.info('Bulk manufacturer sync completed successfully', { created, updated });
-        return { created, updated, errors: 0 };
+        totalCreated = mappingUpdates.filter((m) => m.lastSyncAction === 'create').length;
+        totalUpdated = mappingUpdates.filter((m) => m.lastSyncAction === 'update').length;
       } else {
-        // Count successes and failures from individual results
-        const errorCount = bulkResult.results.filter((r) => !r.success).length;
+        totalErrors = bulkResult.results.filter((r) => !r.success).length;
 
         // Only update mappings for successful items
         const successfulMappings = mappingUpdates.filter((_, index) => bulkResult.results[index]?.success);
@@ -1150,12 +1202,24 @@ export class ConfigSyncProcessor {
           await mappingService.upsertMappings(tenantId, successfulMappings);
         }
 
-        // Count creates vs updates from successful mappings
-        const created = successfulMappings.filter((m) => m.lastSyncAction === 'create').length;
-        const updated = successfulMappings.filter((m) => m.lastSyncAction === 'update').length;
-        log.warn('Bulk manufacturer sync completed with errors', { created, updated, errors: errorCount });
-        return { created, updated, errors: errorCount };
+        totalCreated = successfulMappings.filter((m) => m.lastSyncAction === 'create').length;
+        totalUpdated = successfulMappings.filter((m) => m.lastSyncAction === 'update').length;
       }
+
+      // Step 7: Orphan detection
+      const fetchedPlentyIds = new Set(manufacturers.map((m) => m.id));
+      const activeMappingIds = await mappingService.getAllActiveMappings(tenantId);
+
+      const orphanedIds = activeMappingIds.filter((id) => !fetchedPlentyIds.has(id));
+      let totalOrphaned = 0;
+
+      if (orphanedIds.length > 0) {
+        totalOrphaned = await mappingService.markAsOrphaned(tenantId, orphanedIds);
+        log.info('Detected orphaned manufacturers', { count: totalOrphaned, orphanedIds });
+      }
+
+      log.info('Bulk manufacturer sync completed', { created: totalCreated, updated: totalUpdated, errors: totalErrors, orphaned: totalOrphaned });
+      return { created: totalCreated, updated: totalUpdated, errors: totalErrors, orphaned: totalOrphaned };
     } catch (error) {
       log.error('Failed to sync manufacturers', { error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to sync manufacturers: ${error}`);
@@ -1401,7 +1465,7 @@ export class ConfigSyncProcessor {
 
       if (units.length === 0) {
         log.info('No units to sync');
-        return { created: 0, updated: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0, orphaned: 0 };
       }
 
       log.info('Starting bulk unit sync', { count: units.length });
@@ -1497,16 +1561,16 @@ export class ConfigSyncProcessor {
       const bulkResult = await shopware.bulkSyncUnits(bulkPayload);
 
       // Step 5: Update mappings based on results
+      let totalCreated = 0;
+      let totalUpdated = 0;
+      let totalErrors = 0;
+
       if (bulkResult.success) {
         await mappingService.upsertMappings(tenantId, mappingUpdates);
-        // Count creates vs updates
-        const created = mappingUpdates.filter((m) => m.lastSyncAction === 'create').length;
-        const updated = mappingUpdates.filter((m) => m.lastSyncAction === 'update').length;
-        log.info('Bulk unit sync completed successfully', { created, updated });
-        return { created, updated, errors: 0 };
+        totalCreated = mappingUpdates.filter((m) => m.lastSyncAction === 'create').length;
+        totalUpdated = mappingUpdates.filter((m) => m.lastSyncAction === 'update').length;
       } else {
-        // Count successes and failures from individual results
-        const errorCount = bulkResult.results.filter((r) => !r.success).length;
+        totalErrors = bulkResult.results.filter((r) => !r.success).length;
 
         // Only update mappings for successful items
         const successfulMappings = mappingUpdates.filter((_, index) => bulkResult.results[index]?.success);
@@ -1514,12 +1578,24 @@ export class ConfigSyncProcessor {
           await mappingService.upsertMappings(tenantId, successfulMappings);
         }
 
-        // Count creates vs updates from successful mappings
-        const created = successfulMappings.filter((m) => m.lastSyncAction === 'create').length;
-        const updated = successfulMappings.filter((m) => m.lastSyncAction === 'update').length;
-        log.warn('Bulk unit sync completed with errors', { created, updated, errors: errorCount });
-        return { created, updated, errors: errorCount };
+        totalCreated = successfulMappings.filter((m) => m.lastSyncAction === 'create').length;
+        totalUpdated = successfulMappings.filter((m) => m.lastSyncAction === 'update').length;
       }
+
+      // Step 6: Orphan detection
+      const fetchedPlentyIds = new Set(units.map((u) => u.id));
+      const activeMappingIds = await mappingService.getAllActiveMappings(tenantId);
+
+      const orphanedIds = activeMappingIds.filter((id) => !fetchedPlentyIds.has(id));
+      let totalOrphaned = 0;
+
+      if (orphanedIds.length > 0) {
+        totalOrphaned = await mappingService.markAsOrphaned(tenantId, orphanedIds);
+        log.info('Detected orphaned units', { count: totalOrphaned, orphanedIds });
+      }
+
+      log.info('Bulk unit sync completed', { created: totalCreated, updated: totalUpdated, errors: totalErrors, orphaned: totalOrphaned });
+      return { created: totalCreated, updated: totalUpdated, errors: totalErrors, orphaned: totalOrphaned };
     } catch (error) {
       log.error('Failed to sync units', { error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to sync units: ${error}`);
@@ -1596,7 +1672,7 @@ export class ConfigSyncProcessor {
 
       if (allProperties.length === 0) {
         log.info('No properties to sync');
-        return { created: 0, updated: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0, orphaned: 0 };
       }
 
       // Filter properties based on referrers and clients
@@ -1611,7 +1687,7 @@ export class ConfigSyncProcessor {
 
       if (properties.length === 0) {
         log.info('No properties match filter criteria');
-        return { created: 0, updated: 0, errors: 0 };
+        return { created: 0, updated: 0, errors: 0, orphaned: 0 };
       }
 
       log.info('Starting bulk property sync', { count: properties.length });
@@ -1876,8 +1952,43 @@ export class ConfigSyncProcessor {
         }
       }
 
-      log.info('Bulk property sync completed', { created: totalCreated, updated: totalUpdated, errors: totalErrors });
-      return { created: totalCreated, updated: totalUpdated, errors: totalErrors };
+      // Step 7: Orphan detection
+      // IMPORTANT: Compare against allProperties (before filtering) to detect true orphans
+      // Properties that just don't match filter anymore are NOT orphaned, they still exist in Plenty
+      const fetchedPropertyIds = new Set(allProperties.map((p) => p.id));
+      const fetchedSelectionIds = new Set<number>();
+      for (const property of allProperties) {
+        if (property.selections) {
+          for (const selection of property.selections) {
+            fetchedSelectionIds.add(selection.id);
+          }
+        }
+      }
+
+      // Get active mappings
+      const activePropertyIds = await mappingService.getAllActivePropertyMappings(tenantId);
+      const activeSelectionIds = await mappingService.getAllActivePropertySelectionMappings(tenantId);
+
+      // Find orphaned properties (truly deleted from Plenty, not just filtered out)
+      const orphanedPropertyIds = activePropertyIds.filter((id) => !fetchedPropertyIds.has(id));
+      let orphanedProperties = 0;
+      if (orphanedPropertyIds.length > 0) {
+        orphanedProperties = await mappingService.markPropertiesAsOrphaned(tenantId, orphanedPropertyIds);
+        log.info('Detected orphaned properties', { count: orphanedProperties, orphanedIds: orphanedPropertyIds });
+      }
+
+      // Find orphaned selections
+      const orphanedSelectionIds = activeSelectionIds.filter((id) => !fetchedSelectionIds.has(id));
+      let orphanedSelections = 0;
+      if (orphanedSelectionIds.length > 0) {
+        orphanedSelections = await mappingService.markPropertySelectionsAsOrphaned(tenantId, orphanedSelectionIds);
+        log.info('Detected orphaned property selections', { count: orphanedSelections });
+      }
+
+      const totalOrphaned = orphanedProperties + orphanedSelections;
+
+      log.info('Bulk property sync completed', { created: totalCreated, updated: totalUpdated, errors: totalErrors, orphaned: totalOrphaned });
+      return { created: totalCreated, updated: totalUpdated, errors: totalErrors, orphaned: totalOrphaned };
     } catch (error) {
       log.error('Failed to sync properties', { error: error instanceof Error ? error.message : String(error) });
       throw new Error(`Failed to sync properties: ${error}`);

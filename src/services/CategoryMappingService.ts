@@ -1,4 +1,4 @@
-import { PrismaClient, MappingType } from '@prisma/client';
+import { PrismaClient, MappingType, MappingStatus } from '@prisma/client';
 import { getPrismaClient } from '../database/client';
 import { createLogger } from '../utils/logger';
 
@@ -84,6 +84,8 @@ export class CategoryMappingService {
 
     this.log.debug('Upserting category mappings', { tenantId, count: records.length });
 
+    const now = new Date();
+
     // Use transaction to ensure all mappings are saved together
     await this.prisma.$transaction(
       records.map((record) =>
@@ -99,14 +101,18 @@ export class CategoryMappingService {
             plentyCategoryId: record.plentyCategoryId,
             shopwareCategoryId: record.shopwareCategoryId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
           update: {
             shopwareCategoryId: record.shopwareCategoryId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
         })
       )
@@ -201,5 +207,108 @@ export class CategoryMappingService {
       mappingType: m.mappingType,
       lastSyncAction: m.lastSyncAction as 'create' | 'update',
     }));
+  }
+
+  /**
+   * Get all ACTIVE mappings for a tenant (for orphan detection)
+   */
+  async getAllActiveMappings(tenantId: string): Promise<number[]> {
+    const mappings = await this.prisma.categoryMapping.findMany({
+      where: {
+        tenantId,
+        status: MappingStatus.ACTIVE,
+      },
+      select: {
+        plentyCategoryId: true,
+      },
+    });
+
+    return mappings.map((m) => m.plentyCategoryId);
+  }
+
+  /**
+   * Mark mappings as orphaned (no longer exist in Plenty)
+   * Returns count of mappings marked as orphaned
+   */
+  async markAsOrphaned(tenantId: string, plentyIds: number[]): Promise<number> {
+    if (plentyIds.length === 0) {
+      return 0;
+    }
+
+    const result = await this.prisma.categoryMapping.updateMany({
+      where: {
+        tenantId,
+        plentyCategoryId: {
+          in: plentyIds,
+        },
+        status: MappingStatus.ACTIVE,
+      },
+      data: {
+        status: MappingStatus.ORPHANED,
+      },
+    });
+
+    if (result.count > 0) {
+      this.log.info('Marked category mappings as orphaned', {
+        tenantId,
+        count: result.count,
+        plentyIds,
+      });
+    }
+
+    return result.count;
+  }
+
+  /**
+   * Get all orphaned mappings for a tenant
+   */
+  async getOrphanedMappings(tenantId: string): Promise<{
+    plentyCategoryId: number;
+    shopwareCategoryId: string;
+  }[]> {
+    const mappings = await this.prisma.categoryMapping.findMany({
+      where: {
+        tenantId,
+        status: MappingStatus.ORPHANED,
+      },
+      select: {
+        plentyCategoryId: true,
+        shopwareCategoryId: true,
+      },
+    });
+
+    return mappings;
+  }
+
+  /**
+   * Reactivate orphaned mappings (if item reappears in Plenty)
+   */
+  async reactivateMappings(tenantId: string, plentyIds: number[]): Promise<number> {
+    if (plentyIds.length === 0) {
+      return 0;
+    }
+
+    const result = await this.prisma.categoryMapping.updateMany({
+      where: {
+        tenantId,
+        plentyCategoryId: {
+          in: plentyIds,
+        },
+        status: MappingStatus.ORPHANED,
+      },
+      data: {
+        status: MappingStatus.ACTIVE,
+        lastSeenAt: new Date(),
+      },
+    });
+
+    if (result.count > 0) {
+      this.log.info('Reactivated orphaned category mappings', {
+        tenantId,
+        count: result.count,
+      });
+    }
+
+    return result.count;
   }
 }

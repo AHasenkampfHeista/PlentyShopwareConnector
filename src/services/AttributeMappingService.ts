@@ -1,4 +1,4 @@
-import { PrismaClient, MappingType } from '@prisma/client';
+import { PrismaClient, MappingType, MappingStatus } from '@prisma/client';
 import { getPrismaClient } from '../database/client';
 import { createLogger } from '../utils/logger';
 
@@ -114,6 +114,8 @@ export class AttributeMappingService {
 
     this.log.debug('Upserting attribute mappings', { tenantId, count: records.length });
 
+    const now = new Date();
+
     await this.prisma.$transaction(
       records.map((record) =>
         this.prisma.attributeMapping.upsert({
@@ -128,14 +130,18 @@ export class AttributeMappingService {
             plentyAttributeId: record.plentyAttributeId,
             shopwarePropertyGroupId: record.shopwarePropertyGroupId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
           update: {
             shopwarePropertyGroupId: record.shopwarePropertyGroupId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
         })
       )
@@ -296,6 +302,8 @@ export class AttributeMappingService {
 
     this.log.debug('Upserting attribute value mappings', { tenantId, count: records.length });
 
+    const now = new Date();
+
     await this.prisma.$transaction(
       records.map((record) =>
         this.prisma.attributeValueMapping.upsert({
@@ -312,15 +320,19 @@ export class AttributeMappingService {
             shopwarePropertyGroupId: record.shopwarePropertyGroupId,
             shopwarePropertyOptionId: record.shopwarePropertyOptionId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
           update: {
             shopwarePropertyGroupId: record.shopwarePropertyGroupId,
             shopwarePropertyOptionId: record.shopwarePropertyOptionId,
             mappingType: record.mappingType,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
             lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
           },
         })
       )
@@ -426,5 +438,106 @@ export class AttributeMappingService {
       mappingType: m.mappingType,
       lastSyncAction: m.lastSyncAction as 'create' | 'update',
     }));
+  }
+
+  // ============================================
+  // ORPHAN DETECTION METHODS
+  // ============================================
+
+  /**
+   * Get all ACTIVE attribute mappings for a tenant (for orphan detection)
+   */
+  async getAllActiveAttributeMappings(tenantId: string): Promise<number[]> {
+    const mappings = await this.prisma.attributeMapping.findMany({
+      where: {
+        tenantId,
+        status: MappingStatus.ACTIVE,
+      },
+      select: {
+        plentyAttributeId: true,
+      },
+    });
+
+    return mappings.map((m) => m.plentyAttributeId);
+  }
+
+  /**
+   * Get all ACTIVE attribute value mappings for a tenant (for orphan detection)
+   */
+  async getAllActiveAttributeValueMappings(tenantId: string): Promise<number[]> {
+    const mappings = await this.prisma.attributeValueMapping.findMany({
+      where: {
+        tenantId,
+        status: MappingStatus.ACTIVE,
+      },
+      select: {
+        plentyAttributeValueId: true,
+      },
+    });
+
+    return mappings.map((m) => m.plentyAttributeValueId);
+  }
+
+  /**
+   * Mark attribute mappings as orphaned (no longer exist in Plenty)
+   */
+  async markAttributesAsOrphaned(tenantId: string, plentyIds: number[]): Promise<number> {
+    if (plentyIds.length === 0) {
+      return 0;
+    }
+
+    const result = await this.prisma.attributeMapping.updateMany({
+      where: {
+        tenantId,
+        plentyAttributeId: {
+          in: plentyIds,
+        },
+        status: MappingStatus.ACTIVE,
+      },
+      data: {
+        status: MappingStatus.ORPHANED,
+      },
+    });
+
+    if (result.count > 0) {
+      this.log.info('Marked attribute mappings as orphaned', {
+        tenantId,
+        count: result.count,
+        plentyIds,
+      });
+    }
+
+    return result.count;
+  }
+
+  /**
+   * Mark attribute value mappings as orphaned (no longer exist in Plenty)
+   */
+  async markAttributeValuesAsOrphaned(tenantId: string, plentyValueIds: number[]): Promise<number> {
+    if (plentyValueIds.length === 0) {
+      return 0;
+    }
+
+    const result = await this.prisma.attributeValueMapping.updateMany({
+      where: {
+        tenantId,
+        plentyAttributeValueId: {
+          in: plentyValueIds,
+        },
+        status: MappingStatus.ACTIVE,
+      },
+      data: {
+        status: MappingStatus.ORPHANED,
+      },
+    });
+
+    if (result.count > 0) {
+      this.log.info('Marked attribute value mappings as orphaned', {
+        tenantId,
+        count: result.count,
+      });
+    }
+
+    return result.count;
   }
 }
