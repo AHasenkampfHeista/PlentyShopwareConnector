@@ -1,12 +1,33 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, MediaSourceType } from '@prisma/client';
 import { getPrismaClient } from '../database/client';
 import { createLogger } from '../utils/logger';
-import type { PlentyVariation } from '../types/plenty';
-import type { ShopwareProduct } from '../types/shopware';
+import type { PlentyVariation, PlentyItemImage } from '../types/plenty';
+import type { ShopwareProduct, ShopwareProductMedia, ShopwarePropertyOption, ShopwareProductTranslation } from '../types/shopware';
 import type { FieldMapping, TransformationRule } from '../types/sync';
+import type { IShopwareClient } from '../clients/interfaces';
 
 const DEFAULT_CURRENCY_ID = 'EUR';
 const DEFAULT_TAX_RATE = 19; // German VAT
+
+// Language code mapping: Plenty -> Shopware
+const LOCALE_MAP: Record<string, string> = {
+  de: 'de-DE',
+  en: 'en-GB',
+  fr: 'fr-FR',
+  it: 'it-IT',
+  es: 'es-ES',
+  nl: 'nl-NL',
+  pl: 'pl-PL',
+  cz: 'cs-CZ',
+  pt: 'pt-PT',
+  da: 'da-DK',
+  sv: 'sv-SE',
+  no: 'nb-NO',
+  fi: 'fi-FI',
+  ro: 'ro-RO',
+  ru: 'ru-RU',
+  tr: 'tr-TR',
+};
 
 interface LocalConfig {
   categories: Map<number, { id: number; names: Record<string, string> | null }>;
@@ -15,10 +36,21 @@ interface LocalConfig {
   salesPriceMappings: Map<number, { shopwarePriceId: string; mappingType: string }>;
 }
 
+export interface TransformContext {
+  tenantId: string;
+  shopwareClient?: IShopwareClient;
+  itemImages?: Map<number, PlentyItemImage[]>;
+  customMappings?: FieldMapping[];
+  // Shopware system defaults (must be fetched from Shopware before transforming)
+  defaultTaxId?: string;
+  defaultTaxRate?: number;
+  defaultCurrencyId?: string;
+}
+
 /**
  * Product Transformer
  * Transforms Plenty variations to Shopware product format
- * Uses locally cached configuration data
+ * Supports parent-child product structure with proper options/properties distinction
  */
 export class ProductTransformer {
   private prisma: PrismaClient;
@@ -29,24 +61,105 @@ export class ProductTransformer {
     this.prisma = getPrismaClient();
   }
 
+  // ============================================
+  // MAIN TRANSFORM METHODS
+  // ============================================
+
   /**
-   * Transform a Plenty variation to Shopware product format
+   * Transform a main variation to a Shopware PARENT product
+   * Parent products: NO parentId, NO options, HAS properties (attributes + Plenty Properties)
+   */
+  async transformAsParent(
+    variation: PlentyVariation,
+    context: TransformContext
+  ): Promise<ShopwareProduct> {
+    const product = await this.transformBase(variation, context);
+
+    // Parent-specific: no parentId, no options
+    delete product.parentId;
+    delete product.options;
+
+    // Properties: Include both Plenty Attributes (as informational) and Plenty Properties
+    const attributeProperties = await this.buildOptionsFromAttributes(variation, context.tenantId);
+    const plentyProperties = await this.buildPropertiesFromPlentyProperties(variation, context.tenantId);
+    product.properties = [...attributeProperties, ...plentyProperties];
+
+    // Translations for all available languages
+    product.translations = this.buildTranslations(variation);
+
+    // Images (parents get all item images)
+    if (context.shopwareClient && context.itemImages) {
+      product.media = await this.buildProductMedia(variation, context);
+    }
+
+    return product;
+  }
+
+  /**
+   * Transform a child variation to a Shopware VARIANT product
+   * Child products: HAS parentId, HAS options (variant-defining), MAY have properties
+   */
+  async transformAsChild(
+    variation: PlentyVariation,
+    parentShopwareId: string,
+    context: TransformContext
+  ): Promise<ShopwareProduct> {
+    const product = await this.transformBase(variation, context);
+
+    // Child-specific: set parentId
+    product.parentId = parentShopwareId;
+
+    // Options: Attribute values that define this variant (Color, Size, etc.)
+    product.options = await this.buildOptionsFromAttributes(variation, context.tenantId);
+
+    // Properties: Only Plenty Properties (not attributes, as those are in options)
+    product.properties = await this.buildPropertiesFromPlentyProperties(variation, context.tenantId);
+
+    // Translations (can override parent's translations)
+    product.translations = this.buildTranslations(variation);
+
+    // Variant-specific images
+    if (context.shopwareClient && context.itemImages) {
+      product.media = await this.buildProductMedia(variation, context);
+    }
+
+    return product;
+  }
+
+  /**
+   * Legacy transform method - maintains backward compatibility
+   * Transforms as a flat product (no parent-child relationship)
    */
   async transform(
     variation: PlentyVariation,
     tenantId: string,
     customMappings?: FieldMapping[]
   ): Promise<ShopwareProduct> {
-    // Load local config if not cached
-    const config = await this.getLocalConfig(tenantId);
+    const context: TransformContext = { tenantId, customMappings };
+    return this.transformAsParent(variation, context);
+  }
+
+  // ============================================
+  // BASE TRANSFORMATION
+  // ============================================
+
+  /**
+   * Base transformation shared by parent and child
+   * Handles core fields: productNumber, name, description, stock, price, categories, taxId
+   */
+  private async transformBase(
+    variation: PlentyVariation,
+    context: TransformContext
+  ): Promise<ShopwareProduct> {
+    const config = await this.getLocalConfig(context.tenantId);
 
     // Get text in preferred language (de first, then en, then first available)
     const text = this.getVariationText(variation, ['de', 'en']);
 
-    // Transform prices using sales price mappings
-    const prices = this.transformPrices(variation, config);
+    // Transform prices (with currencyId from context)
+    const prices = this.transformPrices(variation, config, context);
 
-    // Get stock from first warehouse
+    // Calculate stock
     const stock = this.calculateStock(variation);
 
     // Build base product
@@ -57,6 +170,8 @@ export class ProductTransformer {
       stock: stock,
       active: variation.isActive ?? true,
       price: prices,
+      // taxId is REQUIRED by Shopware - must come from context
+      taxId: context.defaultTaxId,
       // Internal references
       _plentyItemId: variation.itemId,
       _plentyVariationId: variation.id,
@@ -67,41 +182,198 @@ export class ProductTransformer {
     if (categoryIds.length > 0) {
       const { CategoryMappingService } = await import('../services/CategoryMappingService');
       const categoryMappingService = new CategoryMappingService();
-      const categoryMappings = await categoryMappingService.getBatchMappings(tenantId, categoryIds);
+      const categoryMappings = await categoryMappingService.getBatchMappings(context.tenantId, categoryIds);
 
       product.categories = Object.values(categoryMappings).map((mapping) => ({
         id: mapping.shopwareCategoryId,
       }));
     }
 
-    // Add properties (attributes) if available
-    const attributeValueIds = (variation.variationAttributeValues || [])
-      .map((vav) => vav.valueId || vav.attributeValueId)
-      .filter((id): id is number => id !== undefined && id !== null); // Filter out undefined/null values
-
-    if (attributeValueIds.length > 0) {
-      const { AttributeMappingService } = await import('../services/AttributeMappingService');
-      const attributeMappingService = new AttributeMappingService();
-      const attributeValueMappings = await attributeMappingService.getBatchAttributeValueMappings(
-        tenantId,
-        attributeValueIds
-      );
-
-      product.properties = Object.values(attributeValueMappings).map((mapping) => ({
-        id: mapping.shopwarePropertyOptionId,
-      }));
-    }
-
     // Apply custom field mappings if provided
-    if (customMappings && customMappings.length > 0) {
-      this.applyCustomMappings(product, variation, customMappings);
+    if (context.customMappings && context.customMappings.length > 0) {
+      this.applyCustomMappings(product, variation, context.customMappings);
     }
 
     return product;
   }
 
+  // ============================================
+  // OPTIONS & PROPERTIES BUILDERS
+  // ============================================
+
   /**
-   * Transform multiple variations
+   * Build options/properties array from variationAttributeValues
+   * Used for: child variants `options` field OR parent `properties` field
+   */
+  private async buildOptionsFromAttributes(
+    variation: PlentyVariation,
+    tenantId: string
+  ): Promise<ShopwarePropertyOption[]> {
+    const attributeValueIds = (variation.variationAttributeValues || [])
+      .map((vav) => vav.valueId || vav.attributeValueId)
+      .filter((id): id is number => id !== undefined && id !== null);
+
+    if (attributeValueIds.length === 0) {
+      return [];
+    }
+
+    const { AttributeMappingService } = await import('../services/AttributeMappingService');
+    const attributeMappingService = new AttributeMappingService();
+    const attributeValueMappings = await attributeMappingService.getBatchAttributeValueMappings(
+      tenantId,
+      attributeValueIds
+    );
+
+    return Object.values(attributeValueMappings).map((mapping) => ({
+      id: mapping.shopwarePropertyOptionId,
+    }));
+  }
+
+  /**
+   * Build properties array from Plenty Properties (variationProperties)
+   * Used for informational properties like Material, Care Instructions
+   */
+  private async buildPropertiesFromPlentyProperties(
+    variation: PlentyVariation,
+    tenantId: string
+  ): Promise<ShopwarePropertyOption[]> {
+    const variationProperties = variation.variationProperties || [];
+
+    if (variationProperties.length === 0) {
+      return [];
+    }
+
+    const { PropertyMappingService } = await import('../services/PropertyMappingService');
+    const propertyMappingService = new PropertyMappingService();
+
+    const properties: ShopwarePropertyOption[] = [];
+
+    // Get all selection IDs
+    const selectionIds = variationProperties
+      .filter((vp) => vp.propertySelectionId !== null)
+      .map((vp) => vp.propertySelectionId as number);
+
+    if (selectionIds.length > 0) {
+      const selectionMappings = await propertyMappingService.getBatchPropertySelectionMappings(
+        tenantId,
+        selectionIds
+      );
+
+      for (const vp of variationProperties) {
+        if (vp.propertySelectionId && selectionMappings[vp.propertySelectionId]) {
+          const mapping = selectionMappings[vp.propertySelectionId];
+          properties.push({ id: mapping.shopwarePropertyOptionId });
+        }
+      }
+    }
+
+    return properties;
+  }
+
+  // ============================================
+  // TRANSLATIONS BUILDER
+  // ============================================
+
+  /**
+   * Build translations object from variationTexts
+   * Maps Plenty language codes to Shopware locale codes
+   */
+  private buildTranslations(variation: PlentyVariation): Record<string, ShopwareProductTranslation> {
+    const variationTexts = variation.variationTexts || [];
+
+    // Fallback to item texts if no variation texts
+    const itemTexts = variation.item?.itemTexts || [];
+    const allTexts = variationTexts.length > 0 ? variationTexts : itemTexts;
+
+    if (allTexts.length === 0) {
+      return {};
+    }
+
+    const translations: Record<string, ShopwareProductTranslation> = {};
+
+    for (const text of allTexts) {
+      const shopwareLocale = LOCALE_MAP[text.lang] || `${text.lang}-${text.lang.toUpperCase()}`;
+
+      translations[shopwareLocale] = {
+        name: text.name || '',
+        description: text.description || text.shortDescription || undefined,
+        metaDescription: text.metaDescription || undefined,
+        metaTitle: undefined, // PlentyVariationText doesn't have metaTitle
+        keywords: text.metaKeywords || undefined,
+      };
+    }
+
+    return translations;
+  }
+
+  // ============================================
+  // MEDIA BUILDER
+  // ============================================
+
+  /**
+   * Build product media array from item images
+   * Uploads images to Shopware and returns media references
+   */
+  private async buildProductMedia(
+    variation: PlentyVariation,
+    context: TransformContext
+  ): Promise<ShopwareProductMedia[]> {
+    if (!context.shopwareClient || !context.itemImages) {
+      return [];
+    }
+
+    const itemImages = context.itemImages.get(variation.itemId) || [];
+
+    if (itemImages.length === 0) {
+      return [];
+    }
+
+    const { MediaService } = await import('../services/MediaService');
+    const mediaService = new MediaService();
+
+    const media: ShopwareProductMedia[] = [];
+
+    for (const [index, img] of itemImages.entries()) {
+      try {
+        // Skip if no URL available
+        if (!img.url) {
+          continue;
+        }
+
+        // Upload to Shopware via MediaService
+        const result = await mediaService.uploadFromUrl(context.tenantId, context.shopwareClient, {
+          sourceUrl: img.url,
+          sourceType: MediaSourceType.PRODUCT_IMAGE,
+          sourceEntityId: `${variation.itemId}:${img.id}`,
+          folderName: 'Product Media',
+          title: img.names?.[0]?.name || `${variation.number || variation.id} - Image ${index + 1}`,
+          alt: img.names?.[0]?.alternate || `Product image for ${variation.number}`,
+        });
+
+        if (result.success && result.shopwareMediaId) {
+          media.push({
+            mediaId: result.shopwareMediaId,
+            position: img.position || index,
+          });
+        }
+      } catch (error) {
+        this.log.warn('Failed to upload product image', {
+          variationId: variation.id,
+          imageId: img.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return media;
+  }
+
+  // ============================================
+  // BATCH TRANSFORMATION
+  // ============================================
+
+  /**
+   * Transform multiple variations (legacy method)
    */
   async transformBatch(
     variations: PlentyVariation[],
@@ -128,6 +400,10 @@ export class ProductTransformer {
 
     return products;
   }
+
+  // ============================================
+  // CONFIGURATION & CACHING
+  // ============================================
 
   /**
    * Get locally cached configuration data
@@ -188,6 +464,10 @@ export class ProductTransformer {
     return config;
   }
 
+  // ============================================
+  // TEXT & PRICE HELPERS
+  // ============================================
+
   /**
    * Get variation text in preferred language
    */
@@ -234,18 +514,23 @@ export class ProductTransformer {
 
   /**
    * Transform variation sales prices to Shopware price format
-   * Supports main price and list price (RRP) using sales price mappings
+   * Uses currencyId and taxRate from context (fetched from Shopware)
    */
   private transformPrices(
     variation: PlentyVariation,
-    config: LocalConfig
+    config: LocalConfig,
+    context: TransformContext
   ): { currencyId: string; gross: number; net: number; linked: boolean; listPrice?: { gross: number; net: number; linked: boolean } | null }[] {
     const prices = variation.variationSalesPrices || [];
 
+    // Use currency UUID from context, fallback to the string constant (will fail validation in Shopware)
+    const currencyId = context.defaultCurrencyId || DEFAULT_CURRENCY_ID;
+    // Use tax rate from context, fallback to 19%
+    const taxRate = context.defaultTaxRate || DEFAULT_TAX_RATE;
+
     if (prices.length === 0) {
-      // Return default price structure with zero price
       return [{
-        currencyId: DEFAULT_CURRENCY_ID,
+        currencyId,
         gross: 0,
         net: 0,
         linked: true,
@@ -258,19 +543,16 @@ export class ProductTransformer {
     let rrpPriceValue: number | null = null;
     let mainSalesPriceId: number | null = null;
 
-    // Look for prices by type
     for (const price of prices) {
       const salesPrice = config.salesPrices.get(price.salesPriceId);
 
       if (!salesPrice) continue;
 
-      // Find default price for main price
       if (salesPrice.type === 'default' && mainPriceValue === null) {
         mainPriceValue = price.price;
         mainSalesPriceId = price.salesPriceId;
       }
 
-      // Find RRP price for list price
       if (salesPrice.type === 'rrp' && rrpPriceValue === null) {
         rrpPriceValue = price.price;
       }
@@ -282,7 +564,7 @@ export class ProductTransformer {
       mainSalesPriceId = prices[0].salesPriceId;
     }
 
-    // Look for RRP if not found through mapping
+    // Look for RRP if not found
     if (rrpPriceValue === null) {
       for (const price of prices) {
         const salesPrice = config.salesPrices.get(price.salesPriceId);
@@ -293,11 +575,9 @@ export class ProductTransformer {
       }
     }
 
-    // Calculate gross and net prices
     const grossPrice = mainPriceValue ?? 0;
-    const netPrice = grossPrice / (1 + DEFAULT_TAX_RATE / 100);
+    const netPrice = grossPrice / (1 + taxRate / 100);
 
-    // Build the main price object
     const shopwarePrice: {
       currencyId: string;
       gross: number;
@@ -305,16 +585,15 @@ export class ProductTransformer {
       linked: boolean;
       listPrice?: { gross: number; net: number; linked: boolean } | null;
     } = {
-      currencyId: DEFAULT_CURRENCY_ID,
+      currencyId,
       gross: grossPrice,
       net: netPrice,
       linked: true,
       listPrice: null,
     };
 
-    // Add list price (RRP) if available
     if (rrpPriceValue !== null && rrpPriceValue > grossPrice) {
-      const rrpNet = rrpPriceValue / (1 + DEFAULT_TAX_RATE / 100);
+      const rrpNet = rrpPriceValue / (1 + taxRate / 100);
       shopwarePrice.listPrice = {
         gross: rrpPriceValue,
         net: rrpNet,
@@ -323,32 +602,6 @@ export class ProductTransformer {
     }
 
     return [shopwarePrice];
-  }
-
-  /**
-   * Find the main/default price from variation sales prices (legacy method)
-   * @deprecated Use transformPrices instead
-   */
-  private findMainPrice(
-    variation: PlentyVariation,
-    config: LocalConfig
-  ): { price: number; salesPriceId: number } | null {
-    const prices = variation.variationSalesPrices || [];
-
-    if (prices.length === 0) {
-      return null;
-    }
-
-    // Try to find the default price first
-    for (const price of prices) {
-      const salesPrice = config.salesPrices.get(price.salesPriceId);
-      if (salesPrice?.type === 'default') {
-        return { price: price.price, salesPriceId: price.salesPriceId };
-      }
-    }
-
-    // Fall back to first price
-    return { price: prices[0].price, salesPriceId: prices[0].salesPriceId };
   }
 
   /**
@@ -361,11 +614,14 @@ export class ProductTransformer {
       return 0;
     }
 
-    // Sum up net stock from all warehouses
     return stockEntries.reduce((total, entry) => {
       return total + (entry.netStock || 0);
     }, 0);
   }
+
+  // ============================================
+  // CUSTOM MAPPING HELPERS
+  // ============================================
 
   /**
    * Apply custom field mappings to the product
@@ -380,14 +636,12 @@ export class ProductTransformer {
         const value = this.getNestedValue(variation, mapping.plentyField);
 
         if (value !== undefined) {
-          // Apply transformation if specified
           const transformedValue = mapping.transformationRule
             ? this.applyTransformation(value, mapping.transformationRule)
             : value;
 
           this.setNestedValue(product as unknown as Record<string, unknown>, mapping.shopwareField, transformedValue);
         } else if (mapping.defaultValue !== undefined) {
-          // Use default value if source value is undefined
           this.setNestedValue(product as unknown as Record<string, unknown>, mapping.shopwareField, mapping.defaultValue);
         }
       } catch (error) {
@@ -400,10 +654,6 @@ export class ProductTransformer {
     }
   }
 
-  /**
-   * Get nested value from object using dot notation
-   * e.g., "variationTexts.0.name" -> variation.variationTexts[0].name
-   */
   private getNestedValue(obj: unknown, path: string): unknown {
     const parts = path.split('.');
     let current: unknown = obj;
@@ -413,7 +663,6 @@ export class ProductTransformer {
         return undefined;
       }
 
-      // Handle array index
       if (/^\d+$/.test(part)) {
         current = (current as unknown[])[parseInt(part, 10)];
       } else {
@@ -424,9 +673,6 @@ export class ProductTransformer {
     return current;
   }
 
-  /**
-   * Set nested value on object using dot notation
-   */
   private setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
     const parts = path.split('.');
     let current = obj;
@@ -434,7 +680,6 @@ export class ProductTransformer {
     for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i];
       if (current[part] === undefined) {
-        // Create object or array based on next part
         current[part] = /^\d+$/.test(parts[i + 1]) ? [] : {};
       }
       current = current[part] as Record<string, unknown>;
@@ -443,9 +688,6 @@ export class ProductTransformer {
     current[parts[parts.length - 1]] = value;
   }
 
-  /**
-   * Apply transformation rule to a value
-   */
   private applyTransformation(value: unknown, rule: TransformationRule): unknown {
     switch (rule.type) {
       case 'direct':
@@ -465,7 +707,6 @@ export class ProductTransformer {
 
       case 'concat':
         if (rule.params?.fields && rule.params?.separator !== undefined) {
-          // This would need the full object context, simplified here
           return value;
         }
         return value;

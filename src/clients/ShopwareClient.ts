@@ -553,6 +553,103 @@ export class ShopwareClient implements IShopwareClient {
   }
 
   // ============================================
+  // SYSTEM DEFAULTS
+  // ============================================
+
+  /**
+   * Get the default tax rate from Shopware
+   * Returns the standard tax (typically 19% for DE) by searching for the common rates
+   */
+  async getDefaultTax(): Promise<{ id: string; taxRate: number; name: string } | null> {
+    try {
+      await this.authenticate();
+
+      // Search for taxes, prioritizing standard rates (19% for Germany)
+      const response = await this.http.post('/api/search/tax', {
+        limit: 100,
+        sort: [{ field: 'taxRate', order: 'DESC' }],
+      });
+
+      const taxes = response.data?.data || [];
+
+      if (taxes.length === 0) {
+        this.log.warn('No tax rates found in Shopware');
+        return null;
+      }
+
+      // Prefer 19% (DE standard), then highest rate as fallback
+      const standardTax = taxes.find((t: { taxRate: number }) => t.taxRate === 19);
+      const defaultTax = standardTax || taxes[0];
+
+      this.log.debug('Found default tax', { id: defaultTax.id, rate: defaultTax.taxRate });
+
+      return {
+        id: defaultTax.id,
+        taxRate: defaultTax.taxRate,
+        name: defaultTax.name,
+      };
+    } catch (error) {
+      this.log.error('Failed to get default tax', { error: this.extractErrorMessage(error) });
+      return null;
+    }
+  }
+
+  /**
+   * Get the default currency from Shopware
+   * Returns the system default currency (marked as isSystemDefault)
+   */
+  async getDefaultCurrency(): Promise<{ id: string; isoCode: string; factor: number } | null> {
+    try {
+      await this.authenticate();
+
+      // Search for system default currency
+      const response = await this.http.post('/api/search/currency', {
+        filter: [{ type: 'equals', field: 'isSystemDefault', value: true }],
+        limit: 1,
+      });
+
+      const currencies = response.data?.data || [];
+
+      if (currencies.length === 0) {
+        // Fallback: get EUR or first available currency
+        const fallbackResponse = await this.http.post('/api/search/currency', {
+          limit: 10,
+          sort: [{ field: 'factor', order: 'ASC' }],
+        });
+
+        const fallbackCurrencies = fallbackResponse.data?.data || [];
+        const eurCurrency = fallbackCurrencies.find((c: { isoCode: string }) => c.isoCode === 'EUR');
+        const defaultCurrency = eurCurrency || fallbackCurrencies[0];
+
+        if (!defaultCurrency) {
+          this.log.warn('No currencies found in Shopware');
+          return null;
+        }
+
+        this.log.debug('Using fallback currency', { id: defaultCurrency.id, isoCode: defaultCurrency.isoCode });
+
+        return {
+          id: defaultCurrency.id,
+          isoCode: defaultCurrency.isoCode,
+          factor: defaultCurrency.factor,
+        };
+      }
+
+      const defaultCurrency = currencies[0];
+      this.log.debug('Found default currency', { id: defaultCurrency.id, isoCode: defaultCurrency.isoCode });
+
+      return {
+        id: defaultCurrency.id,
+        isoCode: defaultCurrency.isoCode,
+        factor: defaultCurrency.factor,
+      };
+    } catch (error) {
+      this.log.error('Failed to get default currency', { error: this.extractErrorMessage(error) });
+      return null;
+    }
+  }
+
+  // ============================================
   // PRODUCT METHODS
   // ============================================
 
@@ -705,6 +802,14 @@ export class ShopwareClient implements IShopwareClient {
       ...this.buildProductPayload(product),
       id: product.id || this.generateUuid(),
     }));
+
+    // Debug: log the first product payload to see what's being sent
+    if (upsertPayload.length > 0) {
+      this.log.debug('Product payload sample', {
+        productNumber: upsertPayload[0].productNumber,
+        payload: JSON.stringify(upsertPayload[0], null, 2),
+      });
+    }
 
     try {
       // Use sync API for upsert operations
@@ -1829,12 +1934,19 @@ export class ShopwareClient implements IShopwareClient {
     if (product.productNumber) payload.productNumber = product.productNumber;
     if (product.name !== undefined) payload.name = product.name;
     if (product.description !== undefined) payload.description = product.description;
-    if (product.stock !== undefined) payload.stock = product.stock;
+    // Stock MUST be an integer for Shopware
+    if (product.stock !== undefined) payload.stock = Math.floor(Number(product.stock));
     if (product.active !== undefined) payload.active = product.active;
     if (product.price) payload.price = product.price;
     if (product.taxId) payload.taxId = product.taxId;
     if (product.manufacturerId) payload.manufacturerId = product.manufacturerId;
     if (product.unitId) payload.unitId = product.unitId;
+    // Parent-child relationship
+    if (product.parentId) payload.parentId = product.parentId;
+    // Options for variant products (child products use options, not properties for variant-defining attributes)
+    if (product.options && product.options.length > 0) {
+      payload.options = product.options.map((o) => ({ id: o.id }));
+    }
     if (product.categories) {
       payload.categories = product.categories.map((c) => ({ id: c.id }));
     }

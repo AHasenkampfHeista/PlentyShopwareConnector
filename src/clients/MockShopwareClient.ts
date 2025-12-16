@@ -708,6 +708,30 @@ export class MockShopwareClient implements IShopwareClient {
   }
 
   /**
+   * Get the default tax rate (mock implementation)
+   * Returns a mock 19% German tax rate
+   */
+  async getDefaultTax(): Promise<{ id: string; taxRate: number; name: string } | null> {
+    return {
+      id: '0193e95fe3a6749ebcaa24ff0f3f5c82', // Mock UUID
+      taxRate: 19,
+      name: 'Standard rate',
+    };
+  }
+
+  /**
+   * Get the default currency (mock implementation)
+   * Returns EUR as the default currency
+   */
+  async getDefaultCurrency(): Promise<{ id: string; isoCode: string; factor: number } | null> {
+    return {
+      id: 'b7d2554b0ce847cd82f3ac9bd1c0dfca', // Mock UUID for EUR
+      isoCode: 'EUR',
+      factor: 1,
+    };
+  }
+
+  /**
    * Check if authenticated
    */
   isAuthenticated(): boolean {

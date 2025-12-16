@@ -7,6 +7,8 @@ export interface ProductMappingRecord {
   plentyVariationId: number;
   shopwareProductId: string;
   shopwareProductNumber: string;
+  isParent: boolean;
+  shopwareParentId?: string;
   lastSyncAction: 'create' | 'update';
 }
 
@@ -14,12 +16,15 @@ export interface ProductMappingLookup {
   [variationId: number]: {
     shopwareProductId: string;
     shopwareProductNumber: string;
+    isParent?: boolean;
+    shopwareParentId?: string | null;
   };
 }
 
 /**
  * Product Mapping Service
  * Manages the mapping between PlentyMarkets variations and Shopware products
+ * Supports parent-child product relationships
  */
 export class ProductMappingService {
   private prisma: PrismaClient;
@@ -52,6 +57,8 @@ export class ProductMappingService {
         plentyVariationId: true,
         shopwareProductId: true,
         shopwareProductNumber: true,
+        isParent: true,
+        shopwareParentId: true,
       },
     });
 
@@ -60,6 +67,8 @@ export class ProductMappingService {
       lookup[mapping.plentyVariationId] = {
         shopwareProductId: mapping.shopwareProductId,
         shopwareProductNumber: mapping.shopwareProductNumber,
+        isParent: mapping.isParent,
+        shopwareParentId: mapping.shopwareParentId,
       };
     }
 
@@ -101,12 +110,16 @@ export class ProductMappingService {
             plentyVariationId: record.plentyVariationId,
             shopwareProductId: record.shopwareProductId,
             shopwareProductNumber: record.shopwareProductNumber,
+            isParent: record.isParent,
+            shopwareParentId: record.shopwareParentId,
             lastSyncedAt: new Date(),
             lastSyncAction: record.lastSyncAction,
           },
           update: {
             shopwareProductId: record.shopwareProductId,
             shopwareProductNumber: record.shopwareProductNumber,
+            isParent: record.isParent,
+            shopwareParentId: record.shopwareParentId,
             lastSyncedAt: new Date(),
             lastSyncAction: record.lastSyncAction,
           },
@@ -126,7 +139,7 @@ export class ProductMappingService {
   async getMapping(
     tenantId: string,
     variationId: number
-  ): Promise<{ shopwareProductId: string; shopwareProductNumber: string } | null> {
+  ): Promise<{ shopwareProductId: string; shopwareProductNumber: string; isParent: boolean; shopwareParentId: string | null } | null> {
     const mapping = await this.prisma.productMapping.findUnique({
       where: {
         tenantId_plentyVariationId: {
@@ -137,10 +150,79 @@ export class ProductMappingService {
       select: {
         shopwareProductId: true,
         shopwareProductNumber: true,
+        isParent: true,
+        shopwareParentId: true,
       },
     });
 
     return mapping;
+  }
+
+  /**
+   * Get the parent product mapping for a given Plenty item ID
+   * Used during delta sync to find parent when only child variations are updated
+   */
+  async getParentMapping(
+    tenantId: string,
+    plentyItemId: number
+  ): Promise<{ shopwareProductId: string; plentyVariationId: number } | null> {
+    const mapping = await this.prisma.productMapping.findFirst({
+      where: {
+        tenantId,
+        plentyItemId,
+        isParent: true,
+      },
+      select: {
+        shopwareProductId: true,
+        plentyVariationId: true,
+      },
+    });
+
+    return mapping;
+  }
+
+  /**
+   * Get all parent product mappings for a tenant
+   */
+  async getParentMappings(
+    tenantId: string
+  ): Promise<Array<{ plentyItemId: number; plentyVariationId: number; shopwareProductId: string }>> {
+    const mappings = await this.prisma.productMapping.findMany({
+      where: {
+        tenantId,
+        isParent: true,
+      },
+      select: {
+        plentyItemId: true,
+        plentyVariationId: true,
+        shopwareProductId: true,
+      },
+    });
+
+    return mappings;
+  }
+
+  /**
+   * Get all child mappings for a specific parent item
+   */
+  async getChildMappings(
+    tenantId: string,
+    plentyItemId: number
+  ): Promise<Array<{ plentyVariationId: number; shopwareProductId: string; shopwareParentId: string | null }>> {
+    const mappings = await this.prisma.productMapping.findMany({
+      where: {
+        tenantId,
+        plentyItemId,
+        isParent: false,
+      },
+      select: {
+        plentyVariationId: true,
+        shopwareProductId: true,
+        shopwareParentId: true,
+      },
+    });
+
+    return mappings;
   }
 
   /**
@@ -177,6 +259,30 @@ export class ProductMappingService {
   async getMappingCount(tenantId: string): Promise<number> {
     return this.prisma.productMapping.count({
       where: { tenantId },
+    });
+  }
+
+  /**
+   * Get count of parent products for a tenant
+   */
+  async getParentCount(tenantId: string): Promise<number> {
+    return this.prisma.productMapping.count({
+      where: {
+        tenantId,
+        isParent: true,
+      },
+    });
+  }
+
+  /**
+   * Get count of child products for a tenant
+   */
+  async getChildCount(tenantId: string): Promise<number> {
+    return this.prisma.productMapping.count({
+      where: {
+        tenantId,
+        isParent: false,
+      },
     });
   }
 }

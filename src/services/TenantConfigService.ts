@@ -19,6 +19,11 @@ export const ConfigKeys = {
 
   // Mappings
   TAX_MAPPINGS: 'taxMappings', // { plentyTaxId: shopwareTaxId }
+
+  // Shopware System Defaults (UUIDs fetched from Shopware)
+  SHOPWARE_DEFAULT_TAX_ID: 'shopwareDefaultTaxId', // Shopware UUID for default tax rate
+  SHOPWARE_DEFAULT_TAX_RATE: 'shopwareDefaultTaxRate', // Tax rate as number (e.g., 19)
+  SHOPWARE_DEFAULT_CURRENCY_ID: 'shopwareDefaultCurrencyId', // Shopware UUID for default currency
 } as const;
 
 export type ConfigKey = (typeof ConfigKeys)[keyof typeof ConfigKeys];
@@ -283,5 +288,106 @@ export class TenantConfigService {
    */
   async getPropertyClients(tenantId: string): Promise<string[] | null> {
     return this.getArray<string>(tenantId, ConfigKeys.PROPERTY_CLIENTS);
+  }
+
+  // ============================================
+  // SHOPWARE SYSTEM DEFAULTS
+  // ============================================
+
+  /**
+   * Get Shopware default tax configuration
+   * Returns null if not configured (needs to be fetched from Shopware first)
+   */
+  async getShopwareDefaultTax(tenantId: string): Promise<{ id: string; taxRate: number } | null> {
+    const id = await this.getString(tenantId, ConfigKeys.SHOPWARE_DEFAULT_TAX_ID);
+    const taxRate = await this.getNumber(tenantId, ConfigKeys.SHOPWARE_DEFAULT_TAX_RATE);
+
+    if (!id || taxRate === null) {
+      return null;
+    }
+
+    return { id, taxRate };
+  }
+
+  /**
+   * Set Shopware default tax configuration
+   */
+  async setShopwareDefaultTax(tenantId: string, id: string, taxRate: number): Promise<void> {
+    await this.setMany(tenantId, [
+      {
+        key: ConfigKeys.SHOPWARE_DEFAULT_TAX_ID,
+        value: id,
+        description: 'Shopware default tax UUID (auto-fetched from Shopware)',
+      },
+      {
+        key: ConfigKeys.SHOPWARE_DEFAULT_TAX_RATE,
+        value: taxRate,
+        description: 'Shopware default tax rate percentage',
+      },
+    ]);
+  }
+
+  /**
+   * Get Shopware default currency ID
+   * Returns null if not configured (needs to be fetched from Shopware first)
+   */
+  async getShopwareDefaultCurrencyId(tenantId: string): Promise<string | null> {
+    return this.getString(tenantId, ConfigKeys.SHOPWARE_DEFAULT_CURRENCY_ID);
+  }
+
+  /**
+   * Set Shopware default currency ID
+   */
+  async setShopwareDefaultCurrencyId(tenantId: string, currencyId: string): Promise<void> {
+    await this.set(tenantId, ConfigKeys.SHOPWARE_DEFAULT_CURRENCY_ID, currencyId, 'Shopware default currency UUID (auto-fetched from Shopware)');
+  }
+
+  /**
+   * Get all Shopware system defaults
+   * Returns null if any value is missing
+   */
+  async getShopwareDefaults(tenantId: string): Promise<{
+    taxId: string;
+    taxRate: number;
+    currencyId: string;
+  } | null> {
+    const tax = await this.getShopwareDefaultTax(tenantId);
+    const currencyId = await this.getShopwareDefaultCurrencyId(tenantId);
+
+    if (!tax || !currencyId) {
+      return null;
+    }
+
+    return {
+      taxId: tax.id,
+      taxRate: tax.taxRate,
+      currencyId,
+    };
+  }
+
+  /**
+   * Set all Shopware system defaults
+   */
+  async setShopwareDefaults(
+    tenantId: string,
+    defaults: { taxId: string; taxRate: number; currencyId: string }
+  ): Promise<void> {
+    await this.setMany(tenantId, [
+      {
+        key: ConfigKeys.SHOPWARE_DEFAULT_TAX_ID,
+        value: defaults.taxId,
+        description: 'Shopware default tax UUID',
+      },
+      {
+        key: ConfigKeys.SHOPWARE_DEFAULT_TAX_RATE,
+        value: defaults.taxRate,
+        description: 'Shopware default tax rate percentage',
+      },
+      {
+        key: ConfigKeys.SHOPWARE_DEFAULT_CURRENCY_ID,
+        value: defaults.currencyId,
+        description: 'Shopware default currency UUID',
+      },
+    ]);
   }
 }

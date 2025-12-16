@@ -295,6 +295,22 @@ export interface IShopwareClient {
    * Check if client is authenticated
    */
   isAuthenticated(): boolean;
+
+  // ============================================
+  // SYSTEM DEFAULTS
+  // ============================================
+
+  /**
+   * Get the default tax rate from Shopware
+   * Returns the standard tax entry (typically 19% for DE)
+   */
+  getDefaultTax(): Promise<{ id: string; taxRate: number; name: string } | null>;
+
+  /**
+   * Get the default currency from Shopware
+   * Returns the system default currency (typically EUR)
+   */
+  getDefaultCurrency(): Promise<{ id: string; isoCode: string; factor: number } | null>;
 }
 
 /**

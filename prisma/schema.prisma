@@ -467,6 +467,10 @@ model ProductMapping {
   shopwareProductId     String   @map("shopware_product_id") // UUID from Shopware
   shopwareProductNumber String   @map("shopware_product_number") // SKU
 
+  // Parent-child relationship tracking
+  isParent              Boolean  @default(false) @map("is_parent") // True if this is a parent product
+  shopwareParentId      String?  @map("shopware_parent_id") // Shopware UUID of parent (for child variants)
+
   // Sync metadata
   lastSyncedAt          DateTime @map("last_synced_at")
   lastSyncAction        String   @map("last_sync_action") // 'create', 'update'
@@ -479,6 +483,7 @@ model ProductMapping {
   @@unique([tenantId, shopwareProductId])
   @@index([tenantId, shopwareProductNumber])
   @@index([tenantId, plentyItemId])
+  @@index([tenantId, isParent]) // Index for efficient parent lookup
   @@map("product_mappings")
 }
 

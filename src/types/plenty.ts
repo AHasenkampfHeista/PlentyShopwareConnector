@@ -576,3 +576,40 @@ export interface PlentyStockManagementEntry {
   updatedAt: string;
   variationId: number;
 }
+
+// ============================================
+// ITEM IMAGES
+// ============================================
+
+export interface PlentyItemImage {
+  id: number;
+  itemId: number;
+  fileType: string;          // 'jpg', 'png', etc.
+  path: string;              // Internal path
+  position: number;          // Sort order
+  url: string;               // Full size image URL
+  urlMiddle: string;         // Medium size image URL
+  urlPreview: string;        // Small preview URL
+  urlSecondPreview: string;  // Second preview size
+  width: number;
+  height: number;
+  size: number;              // File size in bytes
+  cleanImageName: string;    // Cleaned file name
+  createdAt: string;
+  updatedAt: string;
+  names?: PlentyItemImageName[];
+  availabilities?: PlentyItemImageAvailability[];
+}
+
+export interface PlentyItemImageName {
+  imageId: number;
+  lang: string;
+  name: string;
+  alternate: string;         // Alt text
+}
+
+export interface PlentyItemImageAvailability {
+  imageId: number;
+  type: string;              // 'marketplace', 'mandant', etc.
+  value: number;             // ID of marketplace/client
+}

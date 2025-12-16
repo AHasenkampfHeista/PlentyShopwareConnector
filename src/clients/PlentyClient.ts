@@ -14,6 +14,7 @@ import {
   PlentyUnit,
   PlentyProperty,
   PlentyStockManagementEntry,
+  PlentyItemImage,
 } from '../types/plenty';
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
@@ -318,6 +319,7 @@ export class PlentyClient {
     return this.getAllVariations({
       updatedBetween,
       with: withRelations.join(','),
+      'itemId': 23423
     });
   }
 
@@ -607,6 +609,78 @@ export class PlentyClient {
 
       return true;
     });
+  }
+
+  // ============================================
+  // IMAGE ENDPOINTS
+  // ============================================
+
+  /**
+   * Get all images for an item
+   * @param itemId - The item ID to get images for
+   * @param withNames - Include image names/alt texts (default: true)
+   */
+  async getItemImages(itemId: number, withNames = true): Promise<PlentyItemImage[]> {
+    try {
+      const params: Record<string, unknown> = {};
+      if (withNames) {
+        params.with = 'names';
+      }
+
+      const images = await this.get<PlentyItemImage[]>(
+        `/rest/items/${itemId}/images`,
+        params
+      );
+
+      this.log.debug('Fetched item images', { itemId, count: images.length });
+      return images;
+    } catch (error) {
+      this.log.warn('Failed to fetch item images', {
+        itemId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Get all images for multiple items in batch
+   * @param itemIds - Array of item IDs to get images for
+   * @returns Map of itemId to images
+   */
+  async getBatchItemImages(itemIds: number[]): Promise<Map<number, PlentyItemImage[]>> {
+    const results = new Map<number, PlentyItemImage[]>();
+
+    // Deduplicate item IDs
+    const uniqueItemIds = [...new Set(itemIds)];
+
+    // Fetch in parallel with concurrency limit
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < uniqueItemIds.length; i += BATCH_SIZE) {
+      const batch = uniqueItemIds.slice(i, i + BATCH_SIZE);
+
+      const promises = batch.map(async (itemId) => {
+        const images = await this.getItemImages(itemId);
+        return { itemId, images };
+      });
+
+      const batchResults = await Promise.all(promises);
+      for (const { itemId, images } of batchResults) {
+        results.set(itemId, images);
+      }
+
+      // Small delay between batches to avoid rate limiting
+      if (i + BATCH_SIZE < uniqueItemIds.length) {
+        await this.delay(50);
+      }
+    }
+
+    this.log.info('Fetched batch item images', {
+      itemCount: uniqueItemIds.length,
+      totalImages: Array.from(results.values()).reduce((sum, imgs) => sum + imgs.length, 0),
+    });
+
+    return results;
   }
 
   // ============================================

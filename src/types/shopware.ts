@@ -131,7 +131,8 @@ export interface ShopwarePropertyGroup {
   };
 
   // Plenty reference (internal use)
-  _plentyAttributeId?: number;
+  _plentyAttributeId?: number;  // For Plenty Attributes
+  _plentyPropertyId?: number;   // For Plenty Properties
 }
 
 export interface ShopwarePropertyOption {
@@ -144,8 +145,10 @@ export interface ShopwarePropertyOption {
   translations?: Record<string, { name: string }>;
 
   // Plenty reference (internal use)
-  _plentyAttributeId?: number;
-  _plentyAttributeValueId?: number;
+  _plentyAttributeId?: number;       // For Plenty Attributes
+  _plentyAttributeValueId?: number;  // For Plenty Attribute Values
+  _plentyPropertyId?: number;        // For Plenty Properties
+  _plentyPropertySelectionId?: number; // For Plenty Property Selections
 }
 
 export interface ShopwareTag {
