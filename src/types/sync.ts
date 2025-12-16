@@ -64,6 +64,15 @@ export interface SyncError {
 // ============================================
 
 export interface ConfigSyncResult {
+  // Aggregate totals for dashboard display and database storage
+  success: boolean;
+  itemsProcessed: number; // Total items processed across all entity types
+  itemsCreated: number; // Total items created (new in Shopware)
+  itemsUpdated: number; // Total items updated (existing in Shopware)
+  itemsFailed: number; // Total items that failed
+  duration: number; // Total duration in milliseconds
+
+  // Per-entity-type breakdown for detailed view
   categories: {
     synced: number;
     errors: number;
@@ -88,7 +97,6 @@ export interface ConfigSyncResult {
     synced: number;
     errors: number;
   };
-  duration: number;
 }
 
 // ============================================

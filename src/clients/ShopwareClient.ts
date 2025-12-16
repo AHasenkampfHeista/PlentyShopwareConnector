@@ -251,6 +251,37 @@ export class ShopwareClient implements IShopwareClient {
   }
 
   /**
+   * Find media by filename (without extension)
+   */
+  async findMediaByFileName(fileName: string): Promise<{ id: string; mimeType?: string; fileSize?: number } | null> {
+    try {
+      const response = await this.http.post('/api/search/media', {
+        filter: [
+          {
+            type: 'equals',
+            field: 'fileName',
+            value: fileName,
+          },
+        ],
+        limit: 1,
+      });
+
+      const media = response.data?.data?.[0];
+      if (media) {
+        return {
+          id: media.id,
+          mimeType: media.mimeType,
+          fileSize: media.fileSize,
+        };
+      }
+      return null;
+    } catch (error) {
+      this.log.debug('Error searching for media by filename', { fileName, error: this.extractErrorMessage(error) });
+      return null;
+    }
+  }
+
+  /**
    * Create media and upload from URL in one operation
    */
   async createMediaFromUrl(params: {
@@ -262,6 +293,21 @@ export class ShopwareClient implements IShopwareClient {
   }): Promise<ShopwareSyncResult & { mimeType?: string; fileSize?: number }> {
     try {
       this.log.info('Creating media from URL', { sourceUrl: params.sourceUrl, fileName: params.fileName });
+
+      // Check if media with this filename already exists
+      const fileNameWithoutExt = params.fileName.replace(/\.[^/.]+$/, '');
+      const existingMedia = await this.findMediaByFileName(fileNameWithoutExt);
+      if (existingMedia) {
+        this.log.info('Media with filename already exists, reusing', { mediaId: existingMedia.id, fileName: params.fileName });
+        return {
+          id: existingMedia.id,
+          productNumber: '',
+          action: 'update',
+          success: true,
+          mimeType: existingMedia.mimeType,
+          fileSize: existingMedia.fileSize,
+        };
+      }
 
       // First, download the file to get metadata
       let imageResponse;
@@ -339,7 +385,6 @@ export class ShopwareClient implements IShopwareClient {
       }
 
       // Upload the file to the media entity
-      const fileNameWithoutExt = params.fileName.replace(/\.[^/.]+$/, '');
       try {
         await this.http.post(
           `/api/_action/media/${mediaId}/upload`,
@@ -356,24 +401,15 @@ export class ShopwareClient implements IShopwareClient {
         );
       } catch (uploadError) {
         const errorMsg = this.extractErrorMessage(uploadError);
-        // Log detailed error info for debugging
+        // Log detailed error info for debugging - include in message since pino object serialization is unreliable
         if (uploadError instanceof AxiosError) {
-          this.log.error('Failed to upload file to media entity', {
-            mediaId,
-            fileName: params.fileName,
-            extension,
-            contentType,
-            fileSize: fileBuffer.length,
-            error: errorMsg,
-            status: uploadError.response?.status,
-            responseData: JSON.stringify(uploadError.response?.data),
-          });
+          const status = uploadError.response?.status;
+          const responseData = JSON.stringify(uploadError.response?.data);
+          this.log.error(
+            `Failed to upload file to media entity: ${errorMsg} | status=${status} | mediaId=${mediaId} | fileName=${params.fileName} | response=${responseData}`
+          );
         } else {
-          this.log.error('Failed to upload file to media entity', {
-            mediaId,
-            fileName: params.fileName,
-            error: errorMsg,
-          });
+          this.log.error(`Failed to upload file to media entity: ${errorMsg} | mediaId=${mediaId} | fileName=${params.fileName}`);
         }
         return {
           id: mediaId, // Return mediaId even on upload failure for potential cleanup

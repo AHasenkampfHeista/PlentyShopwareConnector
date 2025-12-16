@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, SyncType } from '@prisma/client';
 import { getPrismaClient } from '../database/client';
 import { createJobLogger } from '../utils/logger';
 import { PlentyClient } from '../clients/PlentyClient';
@@ -14,6 +14,7 @@ import type {
   PlentyProperty,
 } from '../types/plenty';
 import type { DecryptedSyncJobData, ConfigSyncResult } from '../types/sync';
+import { getSyncLogService, SyncLogService } from '../services/SyncLogService';
 
 /**
  * Configuration Sync Processor
@@ -26,9 +27,11 @@ import type { DecryptedSyncJobData, ConfigSyncResult } from '../types/sync';
  */
 export class ConfigSyncProcessor {
   private prisma: PrismaClient;
+  private syncLog: SyncLogService;
 
   constructor() {
     this.prisma = getPrismaClient();
+    this.syncLog = getSyncLogService();
   }
 
   /**
@@ -40,14 +43,24 @@ export class ConfigSyncProcessor {
 
     log.info('Starting config sync');
 
+    // Log job start to sync_logs table
+    await this.syncLog.logJobStart(jobData.tenantId, jobData.id, SyncType.CONFIG);
+
     const result: ConfigSyncResult = {
+      // Aggregate totals (will be calculated at the end)
+      success: true,
+      itemsProcessed: 0,
+      itemsCreated: 0,
+      itemsUpdated: 0,
+      itemsFailed: 0,
+      duration: 0,
+      // Per-entity breakdown
       categories: { synced: 0, errors: 0 },
       attributes: { synced: 0, errors: 0 },
       salesPrices: { synced: 0, errors: 0 },
       manufacturers: { synced: 0, errors: 0 },
       units: { synced: 0, errors: 0 },
       properties: { synced: 0, errors: 0 },
-      duration: 0,
     };
 
     try {
@@ -58,46 +71,125 @@ export class ConfigSyncProcessor {
       };
       const plenty = new PlentyClient(plentyConfig);
       await plenty.authenticate();
+      await this.syncLog.logInfo(jobData.tenantId, jobData.id, SyncType.CONFIG, 'Plenty API authenticated');
 
       // Initialize Shopware client
       const shopware: IShopwareClient = createShopwareClient({
         tenantId: jobData.tenantId,
       });
       await shopware.authenticate();
+      await this.syncLog.logInfo(jobData.tenantId, jobData.id, SyncType.CONFIG, 'Shopware API authenticated');
 
       // Ensure custom field set for Plenty connector exists (for sourceType tracking)
       log.info('Ensuring Plenty custom field set exists');
       await shopware.ensurePlentyCustomFieldSet();
 
-      // Sync each config type
+      // Sync each config type and log results
       log.info('Syncing categories');
       result.categories = await this.syncCategories(jobData.tenantId, plenty, shopware);
+      await this.syncLog.logEntityBatch(
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'categories',
+        result.categories.synced, result.categories.errors
+      );
 
       log.info('Syncing attributes');
       result.attributes = await this.syncAttributes(jobData.tenantId, plenty, shopware);
+      await this.syncLog.logEntityBatch(
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'attributes',
+        result.attributes.synced, result.attributes.errors
+      );
 
       log.info('Syncing sales prices');
       result.salesPrices = await this.syncSalesPrices(jobData.tenantId, plenty, shopware);
+      await this.syncLog.logEntityBatch(
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'salesPrices',
+        result.salesPrices.synced, result.salesPrices.errors
+      );
 
       log.info('Syncing manufacturers');
       result.manufacturers = await this.syncManufacturers(jobData.tenantId, plenty, shopware);
+      await this.syncLog.logEntityBatch(
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'manufacturers',
+        result.manufacturers.synced, result.manufacturers.errors
+      );
 
       log.info('Syncing units');
       result.units = await this.syncUnits(jobData.tenantId, plenty, shopware);
+      await this.syncLog.logEntityBatch(
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'units',
+        result.units.synced, result.units.errors
+      );
 
       log.info('Syncing properties');
       result.properties = await this.syncProperties(jobData.tenantId, plenty, shopware);
+      await this.syncLog.logEntityBatch(
+        jobData.tenantId, jobData.id, SyncType.CONFIG, 'properties',
+        result.properties.synced, result.properties.errors
+      );
 
       // Update sync state
       await this.updateSyncState(jobData.tenantId);
 
+      // Calculate aggregate totals from per-entity results
+      const allResults = [
+        result.categories,
+        result.attributes,
+        result.salesPrices,
+        result.manufacturers,
+        result.units,
+        result.properties,
+      ];
+
+      result.itemsProcessed = allResults.reduce((sum, r) => sum + r.synced + r.errors, 0);
+      result.itemsUpdated = allResults.reduce((sum, r) => sum + r.synced, 0); // Config sync is mostly upserts
+      result.itemsFailed = allResults.reduce((sum, r) => sum + r.errors, 0);
+      result.success = result.itemsFailed === 0;
       result.duration = Date.now() - startTime;
-      log.info('Config sync completed', { result });
+
+      log.info('Config sync completed', {
+        duration: result.duration,
+        itemsProcessed: result.itemsProcessed,
+        itemsUpdated: result.itemsUpdated,
+        itemsFailed: result.itemsFailed,
+        categories: result.categories,
+        attributes: result.attributes,
+        salesPrices: result.salesPrices,
+        manufacturers: result.manufacturers,
+        units: result.units,
+        properties: result.properties,
+      });
+
+      // Log job completion to sync_logs table
+      await this.syncLog.logJobComplete(jobData.tenantId, jobData.id, SyncType.CONFIG, {
+        itemsProcessed: result.itemsProcessed,
+        itemsUpdated: result.itemsUpdated,
+        itemsFailed: result.itemsFailed,
+        duration: result.duration,
+        categories: result.categories,
+        attributes: result.attributes,
+        salesPrices: result.salesPrices,
+        manufacturers: result.manufacturers,
+        units: result.units,
+        properties: result.properties,
+      });
 
       return result;
     } catch (error) {
+      result.success = false;
       result.duration = Date.now() - startTime;
       log.error('Config sync failed', { error, result });
+
+      // Log error to sync_logs table
+      await this.syncLog.logError(
+        jobData.tenantId,
+        jobData.id,
+        SyncType.CONFIG,
+        'job',
+        error instanceof Error ? error : String(error),
+        { result }
+      );
+      await this.syncLog.flush(); // Ensure error is saved
+
       throw error;
     }
   }
