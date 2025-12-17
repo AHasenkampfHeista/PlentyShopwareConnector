@@ -2,6 +2,7 @@ import { PrismaClient, PlentyCategory } from '@prisma/client';
 import { getPrismaClient } from '../database/client';
 import { createLogger } from '../utils/logger';
 import { CategoryMappingService, CategoryMappingLookup, CategoryMappingRecord } from './CategoryMappingService';
+import { TenantConfigService } from './TenantConfigService';
 import type { IShopwareClient } from '../clients/interfaces';
 import type { ShopwareCategory } from '../types/shopware';
 import type { PlentyVariation } from '../types/plenty';
@@ -15,16 +16,20 @@ import type { PlentyVariation } from '../types/plenty';
  * - Handles parent hierarchy (bottom-up creation)
  * - Uses PlentyCategory table as source of truth
  * - Extracts localized names from JSON
+ * - Uses configurable Shopware root category for navigation integration
  */
 export class CategorySyncService {
   private prisma: PrismaClient;
   private mappingService: CategoryMappingService;
+  private configService: TenantConfigService;
   private categoryCache: Map<number, PlentyCategory> = new Map();
+  private shopwareRootCategoryId: string | null = null;
   private log = createLogger({ service: 'CategorySyncService' });
 
   constructor() {
     this.prisma = getPrismaClient();
     this.mappingService = new CategoryMappingService();
+    this.configService = new TenantConfigService();
   }
 
   /**
@@ -52,6 +57,21 @@ export class CategorySyncService {
 
     if (categoryIds.length === 0) {
       return {};
+    }
+
+    // Load Shopware root category ID from config (for navigation integration)
+    if (this.shopwareRootCategoryId === null) {
+      this.shopwareRootCategoryId = await this.configService.getShopwareRootCategoryId(tenantId) || '';
+      if (this.shopwareRootCategoryId) {
+        this.log.info('Using Shopware root category for navigation', {
+          rootCategoryId: this.shopwareRootCategoryId,
+        });
+      } else {
+        this.log.warn(
+          'No shopwareRootCategoryId configured. Categories will be created at root level. ' +
+          'Set shopwareRootCategoryId in tenant_configs to place categories under your navigation root.'
+        );
+      }
     }
 
     this.log.debug('Ensuring categories exist', {
@@ -172,6 +192,14 @@ export class CategorySyncService {
           mappingType: 'AUTO',
         };
       }
+    } else if (this.shopwareRootCategoryId) {
+      // No parent in Plenty = root category
+      // Use configured Shopware root category as parent for navigation integration
+      parentShopwareId = this.shopwareRootCategoryId;
+      this.log.debug('Using Shopware root category as parent for Plenty root category', {
+        plentyCategoryId,
+        shopwareRootCategoryId: this.shopwareRootCategoryId,
+      });
     }
 
     // Transform to Shopware format

@@ -24,6 +24,12 @@ export const ConfigKeys = {
   SHOPWARE_DEFAULT_TAX_ID: 'shopwareDefaultTaxId', // Shopware UUID for default tax rate
   SHOPWARE_DEFAULT_TAX_RATE: 'shopwareDefaultTaxRate', // Tax rate as number (e.g., 19)
   SHOPWARE_DEFAULT_CURRENCY_ID: 'shopwareDefaultCurrencyId', // Shopware UUID for default currency
+
+  // Category Configuration
+  SHOPWARE_ROOT_CATEGORY_ID: 'shopwareRootCategoryId', // Shopware navigation root category UUID - all Plenty categories will be children of this
+
+  // Sales Channel Configuration
+  SHOPWARE_SALES_CHANNEL_ID: 'shopwareSalesChannelId', // Shopware sales channel UUID - products will be visible in this channel
 } as const;
 
 export type ConfigKey = (typeof ConfigKeys)[keyof typeof ConfigKeys];
@@ -389,5 +395,55 @@ export class TenantConfigService {
         description: 'Shopware default currency UUID',
       },
     ]);
+  }
+
+  // ============================================
+  // CATEGORY CONFIGURATION
+  // ============================================
+
+  /**
+   * Get Shopware root category ID
+   * All Plenty categories will be created as children of this category
+   * Returns null if not configured (categories will be created at root level)
+   */
+  async getShopwareRootCategoryId(tenantId: string): Promise<string | null> {
+    return this.getString(tenantId, ConfigKeys.SHOPWARE_ROOT_CATEGORY_ID);
+  }
+
+  /**
+   * Set Shopware root category ID
+   */
+  async setShopwareRootCategoryId(tenantId: string, categoryId: string): Promise<void> {
+    await this.set(
+      tenantId,
+      ConfigKeys.SHOPWARE_ROOT_CATEGORY_ID,
+      categoryId,
+      'Shopware navigation root category - all Plenty categories become children of this'
+    );
+  }
+
+  // ============================================
+  // SALES CHANNEL CONFIGURATION
+  // ============================================
+
+  /**
+   * Get Shopware sales channel ID
+   * Products will be assigned visibility to this sales channel
+   * Returns null if not configured (products won't appear in storefront!)
+   */
+  async getShopwareSalesChannelId(tenantId: string): Promise<string | null> {
+    return this.getString(tenantId, ConfigKeys.SHOPWARE_SALES_CHANNEL_ID);
+  }
+
+  /**
+   * Set Shopware sales channel ID
+   */
+  async setShopwareSalesChannelId(tenantId: string, salesChannelId: string): Promise<void> {
+    await this.set(
+      tenantId,
+      ConfigKeys.SHOPWARE_SALES_CHANNEL_ID,
+      salesChannelId,
+      'Shopware sales channel - products will be visible in this storefront'
+    );
   }
 }

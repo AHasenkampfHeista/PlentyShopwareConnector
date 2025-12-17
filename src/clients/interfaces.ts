@@ -287,6 +287,26 @@ export interface IShopwareClient {
   getOrCreateMediaFolder(folderName: string): Promise<string>;
 
   /**
+   * Get all product_media entries for a product
+   */
+  getProductMedia(productId: string): Promise<Array<{ id: string; mediaId: string; position: number }>>;
+
+  /**
+   * Delete product_media entries by their IDs
+   * This removes the association between product and media, not the media itself
+   */
+  deleteProductMedia(productMediaIds: string[]): Promise<{ success: boolean; deleted: number; errors: string[] }>;
+
+  /**
+   * Sync product media - removes orphaned media associations
+   * Compares current product_media with expected IDs and removes stale entries
+   */
+  syncProductMedia(
+    productId: string,
+    newProductMediaIds: string[]
+  ): Promise<{ removed: number; kept: number; errors: string[] }>;
+
+  /**
    * Test connection to Shopware API
    */
   testConnection(): Promise<boolean>;

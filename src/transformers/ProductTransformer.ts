@@ -1,6 +1,6 @@
 import { PrismaClient, MediaSourceType } from '@prisma/client';
 import { getPrismaClient } from '../database/client';
-import { createLogger } from '../utils/logger';
+import { createLogger, generateDeterministicUuid } from '../utils';
 import type { PlentyVariation, PlentyItemImage } from '../types/plenty';
 import type { ShopwareProduct, ShopwareProductMedia, ShopwarePropertyOption, ShopwareProductTranslation } from '../types/shopware';
 import type { FieldMapping, TransformationRule } from '../types/sync';
@@ -45,6 +45,8 @@ export interface TransformContext {
   defaultTaxId?: string;
   defaultTaxRate?: number;
   defaultCurrencyId?: string;
+  // Sales channel for product visibility (required for products to appear in storefront)
+  salesChannelId?: string;
 }
 
 /**
@@ -90,6 +92,17 @@ export class ProductTransformer {
     // Images (parents get all item images)
     if (context.shopwareClient && context.itemImages) {
       product.media = await this.buildProductMedia(variation, context);
+    }
+
+    // Sales channel visibility (required for product to appear in storefront)
+    // Only parent products need visibilities - variants inherit from parent
+    if (context.salesChannelId) {
+      product.visibilities = [
+        {
+          salesChannelId: context.salesChannelId,
+          visibility: 30, // 30 = visible in both search and listings
+        },
+      ];
     }
 
     return product;
@@ -313,6 +326,14 @@ export class ProductTransformer {
   /**
    * Build product media array from item images
    * Uploads images to Shopware and returns media references
+   *
+   * Uses variationLinks from images (fetched from /variation_images API) to determine
+   * which images belong to which variation:
+   *
+   * - Parent (main) variations: Get images with NO variation links (global images)
+   *   AND images explicitly linked to this variation
+   * - Child variations: ONLY get images explicitly linked to this specific variation
+   *   (no global images, as those belong to the parent)
    */
   private async buildProductMedia(
     variation: PlentyVariation,
@@ -322,9 +343,68 @@ export class ProductTransformer {
       return [];
     }
 
-    const itemImages = context.itemImages.get(variation.itemId) || [];
+    const allItemImages = context.itemImages.get(variation.itemId) || [];
 
-    if (itemImages.length === 0) {
+    if (allItemImages.length === 0) {
+      return [];
+    }
+
+    // Filter images based on variation type using variationLinks from the image-side API
+    // variationLinks tells us which variations each image is assigned to
+    //
+    // Image assignment strategy:
+    // - Parent (main variation): Gets ALL images from the item (acts as media pool)
+    //   This ensures all images are uploaded to Shopware once on the parent
+    // - Child variants: ONLY get images explicitly linked to that specific variation
+    //   They reference images already uploaded via the parent
+    //
+    // This optimizes uploads (all images uploaded once to parent) while ensuring
+    // each variant displays only its own specific images.
+    let imagesToUse: PlentyItemImage[] = [];
+
+    if (variation.isMain) {
+      // Parent variation: Gets ALL images from the item (global + all variant-linked)
+      // This makes the parent the "media pool" - all images are uploaded here
+      imagesToUse = allItemImages;
+
+      const globalImages = allItemImages.filter(img => !img.variationLinks || img.variationLinks.length === 0);
+      const variantLinkedImages = allItemImages.filter(img => img.variationLinks && img.variationLinks.length > 0);
+
+      this.log.info('Assigning ALL images to PARENT variation (media pool)', {
+        variationId: variation.id,
+        variationNumber: variation.number,
+        totalItemImages: allItemImages.length,
+        globalImageCount: globalImages.length,
+        variantLinkedImageCount: variantLinkedImages.length,
+        allImageIds: imagesToUse.map(img => img.id),
+      });
+    } else {
+      // Child variation: ONLY use images that are EXPLICITLY linked to this variation
+      // These images are already uploaded via the parent, we just link them here
+      imagesToUse = allItemImages.filter((img) => {
+        // Skip global images - those are only on the parent
+        if (!img.variationLinks || img.variationLinks.length === 0) {
+          return false;
+        }
+        // Only include images explicitly linked to this specific variation
+        return img.variationLinks.some((link) => link.variationId === variation.id);
+      });
+
+      const linkedToChild = allItemImages.filter(img =>
+        img.variationLinks?.some(link => link.variationId === variation.id)
+      );
+
+      this.log.info('Filtered images for CHILD variation', {
+        variationId: variation.id,
+        variationNumber: variation.number,
+        totalItemImages: allItemImages.length,
+        linkedToChildIds: linkedToChild.map(img => img.id),
+        finalImageIds: imagesToUse.map(img => img.id),
+        finalImageCount: imagesToUse.length,
+      });
+    }
+
+    if (imagesToUse.length === 0) {
       return [];
     }
 
@@ -333,10 +413,11 @@ export class ProductTransformer {
 
     const media: ShopwareProductMedia[] = [];
 
-    for (const [index, img] of itemImages.entries()) {
+    for (const [index, img] of imagesToUse.entries()) {
       try {
         // Skip if no URL available
         if (!img.url) {
+          this.log.warn('Image missing URL', { variationId: variation.id, imageId: img.id });
           continue;
         }
 
@@ -351,9 +432,34 @@ export class ProductTransformer {
         });
 
         if (result.success && result.shopwareMediaId) {
+          // Generate deterministic ID for product_media to enable upsert
+          // Based on variation ID and image ID - stable across syncs
+          const productMediaId = generateDeterministicUuid(
+            'product-media',
+            String(variation.id),
+            String(img.id)
+          );
+
           media.push({
+            id: productMediaId,
             mediaId: result.shopwareMediaId,
             position: img.position || index,
+          });
+
+          this.log.info('Media processed for variation', {
+            variationId: variation.id,
+            imageId: img.id,
+            shopwareMediaId: result.shopwareMediaId,
+            productMediaId,
+            wasExisting: result.wasExisting,
+            position: img.position || index,
+          });
+        } else if (!result.success) {
+          this.log.warn('Media upload failed', {
+            variationId: variation.id,
+            imageId: img.id,
+            url: img.url,
+            error: result.error,
           });
         }
       } catch (error) {
@@ -364,6 +470,16 @@ export class ProductTransformer {
         });
       }
     }
+
+    // Summary log
+    this.log.info('buildProductMedia complete', {
+      variationId: variation.id,
+      variationNumber: variation.number,
+      isMain: variation.isMain,
+      inputImageCount: imagesToUse.length,
+      outputMediaCount: media.length,
+      mediaIds: media.map(m => ({ productMediaId: m.id, shopwareMediaId: m.mediaId, position: m.position })),
+    });
 
     return media;
   }

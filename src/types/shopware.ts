@@ -43,6 +43,7 @@ export interface ShopwareProduct {
   options?: ShopwarePropertyOption[];
   tags?: ShopwareTag[];
   media?: ShopwareProductMedia[];
+  visibilities?: ShopwareProductVisibility[];
   createdAt?: string;
   updatedAt?: string;
 
@@ -60,6 +61,16 @@ export interface ShopwareProduct {
   // Reference to original Plenty data (for internal use)
   _plentyItemId?: number;
   _plentyVariationId?: number;
+}
+
+/**
+ * Product visibility in sales channels
+ * visibility: 10 = search only, 20 = listing only, 30 = both (default)
+ */
+export interface ShopwareProductVisibility {
+  id?: string;
+  salesChannelId: string;
+  visibility: number;
 }
 
 export interface ShopwareProductTranslation {

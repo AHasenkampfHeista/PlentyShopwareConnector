@@ -221,11 +221,24 @@ export class ConfigSyncProcessor {
 
       // Step 2: Get all existing mappings at once
       const { CategoryMappingService } = await import('../services/CategoryMappingService');
+      const { TenantConfigService } = await import('../services/TenantConfigService');
       const mappingService = new CategoryMappingService();
+      const configService = new TenantConfigService();
       const existingMappings = await mappingService.getBatchMappings(
         tenantId,
         categories.map((c) => c.id)
       );
+
+      // Get Shopware root category ID for navigation integration
+      const shopwareRootCategoryId = await configService.getShopwareRootCategoryId(tenantId);
+      if (shopwareRootCategoryId) {
+        log.info('Using Shopware root category for navigation', { rootCategoryId: shopwareRootCategoryId });
+      } else {
+        log.warn(
+          'No shopwareRootCategoryId configured. Categories will be created at root level. ' +
+          'Set shopwareRootCategoryId in tenant_configs to place categories under your navigation root.'
+        );
+      }
 
       // Step 3: Group categories by level for hierarchical processing
       const categoriesByLevel = new Map<number, PlentyCategory[]>();
@@ -322,6 +335,7 @@ export class ConfigSyncProcessor {
           // Resolve parent Shopware ID from our tracking map
           let shopwareParentId: string | undefined;
           if (category.parentCategoryId) {
+            // Has parent in Plenty - look up in mappings
             shopwareParentId = allMappings.get(category.parentCategoryId);
             if (!shopwareParentId) {
               log.warn('Parent category not found in mappings', {
@@ -329,6 +343,9 @@ export class ConfigSyncProcessor {
                 parentCategoryId: category.parentCategoryId,
               });
             }
+          } else if (shopwareRootCategoryId) {
+            // Root category in Plenty - use configured Shopware root for navigation integration
+            shopwareParentId = shopwareRootCategoryId;
           }
 
           // Get or generate Shopware ID

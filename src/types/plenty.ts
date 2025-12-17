@@ -599,6 +599,8 @@ export interface PlentyItemImage {
   updatedAt: string;
   names?: PlentyItemImageName[];
   availabilities?: PlentyItemImageAvailability[];
+  // Populated separately via /variation_images endpoint
+  variationLinks?: PlentyImageVariationLink[];
 }
 
 export interface PlentyItemImageName {
@@ -612,4 +614,17 @@ export interface PlentyItemImageAvailability {
   imageId: number;
   type: string;              // 'marketplace', 'mandant', etc.
   value: number;             // ID of marketplace/client
+}
+
+/**
+ * Links an image to a specific variation
+ * Fetched from /rest/items/:itemId/images/:imageId/variation_images
+ */
+export interface PlentyImageVariationLink {
+  id: number;
+  itemId: number;
+  variationId: number;
+  imageId: number;
+  createdAt: string;
+  updatedAt: string;
 }

@@ -15,6 +15,7 @@ import {
   PlentyProperty,
   PlentyStockManagementEntry,
   PlentyItemImage,
+  PlentyImageVariationLink,
 } from '../types/plenty';
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
@@ -105,8 +106,15 @@ export class PlentyClient {
       this.log.error('Authentication failed', {
         status: axiosError.response?.status,
         message: axiosError.message,
+        responseData: axiosError.response?.data,
       });
-      throw new Error(`Plenty authentication failed: ${axiosError.message}`);
+
+      // Include response data in error message for debugging
+      const responseInfo = axiosError.response?.data
+        ? ` - Response: ${JSON.stringify(axiosError.response.data)}`
+        : '';
+
+      throw new Error(`Plenty authentication failed: ${axiosError.message}${responseInfo}`);
     }
   }
 
@@ -632,7 +640,18 @@ export class PlentyClient {
         params
       );
 
-      this.log.debug('Fetched item images', { itemId, count: images.length });
+      this.log.info('Fetched item images from Plenty API', {
+        itemId,
+        count: images.length,
+        imageIds: images.map(img => img.id),
+        imageDetails: images.map(img => ({
+          id: img.id,
+          url: img.url,
+          position: img.position,
+          createdAt: img.createdAt,
+          updatedAt: img.updatedAt,
+        })),
+      });
       return images;
     } catch (error) {
       this.log.warn('Failed to fetch item images', {
@@ -644,11 +663,44 @@ export class PlentyClient {
   }
 
   /**
-   * Get all images for multiple items in batch
-   * @param itemIds - Array of item IDs to get images for
-   * @returns Map of itemId to images
+   * Get variation links for a specific image
+   * Returns which variations this image is linked to
+   * @param itemId - The item ID
+   * @param imageId - The image ID
    */
-  async getBatchItemImages(itemIds: number[]): Promise<Map<number, PlentyItemImage[]>> {
+  async getImageVariationLinks(itemId: number, imageId: number): Promise<PlentyImageVariationLink[]> {
+    try {
+      const links = await this.get<PlentyImageVariationLink[]>(
+        `/rest/items/${itemId}/images/${imageId}/variation_images`
+      );
+
+      this.log.info('Fetched image variation links', {
+        itemId,
+        imageId,
+        linkCount: links.length,
+        linkedVariationIds: links.map(link => link.variationId),
+      });
+      return links;
+    } catch (error) {
+      this.log.warn('Failed to fetch image variation links', {
+        itemId,
+        imageId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Get all images for multiple items in batch, including variation links
+   * @param itemIds - Array of item IDs to get images for
+   * @param includeVariationLinks - Whether to fetch which variations each image is linked to (default: true)
+   * @returns Map of itemId to images (with variationLinks populated if requested)
+   */
+  async getBatchItemImages(
+    itemIds: number[],
+    includeVariationLinks = true
+  ): Promise<Map<number, PlentyItemImage[]>> {
     const results = new Map<number, PlentyItemImage[]>();
 
     // Deduplicate item IDs
@@ -661,6 +713,12 @@ export class PlentyClient {
 
       const promises = batch.map(async (itemId) => {
         const images = await this.getItemImages(itemId);
+
+        // Fetch variation links for each image if requested
+        if (includeVariationLinks && images.length > 0) {
+          await this.enrichImagesWithVariationLinks(itemId, images);
+        }
+
         return { itemId, images };
       });
 
@@ -675,12 +733,40 @@ export class PlentyClient {
       }
     }
 
+    const totalImages = Array.from(results.values()).reduce((sum, imgs) => sum + imgs.length, 0);
+    const imagesWithLinks = Array.from(results.values())
+      .flat()
+      .filter(img => img.variationLinks && img.variationLinks.length > 0).length;
+
     this.log.info('Fetched batch item images', {
       itemCount: uniqueItemIds.length,
-      totalImages: Array.from(results.values()).reduce((sum, imgs) => sum + imgs.length, 0),
+      totalImages,
+      imagesWithVariationLinks: imagesWithLinks,
     });
 
     return results;
+  }
+
+  /**
+   * Enrich images with their variation links
+   * Fetches variation_images for each image and attaches to the image object
+   */
+  private async enrichImagesWithVariationLinks(itemId: number, images: PlentyItemImage[]): Promise<void> {
+    // Fetch variation links in parallel for all images
+    const linkPromises = images.map(async (img) => {
+      const links = await this.getImageVariationLinks(itemId, img.id);
+      return { imageId: img.id, links };
+    });
+
+    const linkResults = await Promise.all(linkPromises);
+
+    // Attach links to corresponding images
+    for (const { imageId, links } of linkResults) {
+      const image = images.find(img => img.id === imageId);
+      if (image) {
+        image.variationLinks = links;
+      }
+    }
   }
 
   // ============================================

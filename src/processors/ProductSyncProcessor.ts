@@ -24,6 +24,7 @@ const DEFAULT_WITH_RELATIONS = [
   'variationCategories',
   'variationProperties',  // For Plenty Properties
   'variationTexts',       // For multi-language
+  'variationImages',      // For variation-specific image links
   'stock',
   'item',                 // For mainVariationId and parent-child relationship
 ];
@@ -107,10 +108,23 @@ export class ProductSyncProcessor {
         log
       );
 
+      // Get sales channel ID for product visibility
+      const { TenantConfigService } = await import('../services/TenantConfigService');
+      const configService = new TenantConfigService();
+      const salesChannelId = await configService.getShopwareSalesChannelId(jobData.tenantId);
+
+      if (!salesChannelId) {
+        log.warn(
+          'No shopwareSalesChannelId configured! Products will NOT appear in storefront. ' +
+          'Set shopwareSalesChannelId in tenant_configs to enable product visibility.'
+        );
+      }
+
       log.info('Using Shopware defaults', {
         taxId: shopwareDefaults.taxId,
         taxRate: shopwareDefaults.taxRate,
         currencyId: shopwareDefaults.currencyId,
+        salesChannelId: salesChannelId || '(not configured)',
       });
 
       // Load custom field mappings
@@ -170,12 +184,33 @@ export class ProductSyncProcessor {
       let itemImages: Map<number, PlentyItemImage[]> | undefined;
       if (!options.skipImages) {
         const itemIds = variationGroups.map((g) => g.itemId);
-        log.info('Fetching images for items', { itemCount: itemIds.length });
+        log.info('Fetching images for items', { itemCount: itemIds.length, itemIds });
         itemImages = await plenty.getBatchItemImages(itemIds);
+
+        // Log detailed image counts per item
+        const totalImages = Array.from(itemImages.values()).reduce((sum, imgs) => sum + imgs.length, 0);
+        const itemsWithImages = Array.from(itemImages.entries()).filter(([, imgs]) => imgs.length > 0).length;
+
         log.info('Fetched item images', {
           itemCount: itemIds.length,
-          totalImages: Array.from(itemImages.values()).reduce((sum, imgs) => sum + imgs.length, 0),
+          itemsWithImages,
+          totalImages,
         });
+
+        // Log ALL images with their IDs, URLs, and variation links for debugging
+        for (const [itemId, images] of itemImages.entries()) {
+          log.info('Item images detail', {
+            itemId,
+            imageCount: images.length,
+            images: images.map(img => ({
+              id: img.id,
+              url: img.url,
+              position: img.position,
+              variationLinkCount: img.variationLinks?.length || 0,
+              linkedVariationIds: img.variationLinks?.map(vl => vl.variationId) || [],
+            })),
+          });
+        }
       }
 
       // Create transform context with Shopware defaults
@@ -188,6 +223,8 @@ export class ProductSyncProcessor {
         defaultTaxId: shopwareDefaults.taxId,
         defaultTaxRate: shopwareDefaults.taxRate,
         defaultCurrencyId: shopwareDefaults.currencyId,
+        // Sales channel for product visibility in storefront
+        salesChannelId: salesChannelId || undefined,
       };
 
       // Load existing mappings for all variations
@@ -226,10 +263,35 @@ export class ProductSyncProcessor {
                 transformContext
               );
 
+              // Log media count from transformer
+              if (product.media && product.media.length > 0) {
+                log.info('Transform returned media', {
+                  variationId: group.mainVariation.id,
+                  mediaCount: product.media.length,
+                });
+              } else {
+                log.debug('Transform returned no media', {
+                  variationId: group.mainVariation.id,
+                });
+              }
+
               // Add existing Shopware ID if mapped
               const mapping = existingMappings[group.mainVariation.id];
               if (mapping) {
                 product.id = mapping.shopwareProductId;
+                // Remove visibilities on update - they already exist and would cause duplicate key error
+                // Media uses deterministic IDs so it can be upserted safely
+                delete product.visibilities;
+                log.info('Using existing mapping for parent', {
+                  variationId: group.mainVariation.id,
+                  shopwareProductId: mapping.shopwareProductId,
+                  visibilitiesRemoved: true,
+                });
+              } else {
+                log.info('No existing mapping for parent, creating new', {
+                  variationId: group.mainVariation.id,
+                  hasVisibilities: !!product.visibilities,
+                });
               }
 
               product._plentyItemId = group.itemId;
@@ -277,6 +339,19 @@ export class ProductSyncProcessor {
                     shopwareParentId: undefined,
                     lastSyncAction: itemResult.action,
                   });
+
+                  // Clean up orphaned product_media (images deleted in Plenty)
+                  if (product?.media !== undefined) {
+                    const expectedMediaIds = product.media.map(m => m.id).filter((id): id is string => !!id);
+                    const mediaCleanup = await shopware.syncProductMedia(itemResult.shopwareId, expectedMediaIds);
+                    if (mediaCleanup.removed > 0) {
+                      log.info('Cleaned up orphaned product media', {
+                        productId: itemResult.shopwareId,
+                        removed: mediaCleanup.removed,
+                        kept: mediaCleanup.kept,
+                      });
+                    }
+                  }
                 }
               } else {
                 result.itemsFailed++;
@@ -362,6 +437,7 @@ export class ProductSyncProcessor {
                 const mapping = existingMappings[variation.id];
                 if (mapping) {
                   product.id = mapping.shopwareProductId;
+                  // Media uses deterministic IDs so it can be upserted safely
                 }
 
                 product._plentyItemId = variation.itemId;
@@ -404,6 +480,19 @@ export class ProductSyncProcessor {
                       shopwareParentId: product.parentId,
                       lastSyncAction: itemResult.action,
                     });
+
+                    // Clean up orphaned product_media (images deleted in Plenty)
+                    if (product.media !== undefined) {
+                      const expectedMediaIds = product.media.map(m => m.id).filter((id): id is string => !!id);
+                      const mediaCleanup = await shopware.syncProductMedia(itemResult.shopwareId, expectedMediaIds);
+                      if (mediaCleanup.removed > 0) {
+                        log.info('Cleaned up orphaned product media (child)', {
+                          productId: itemResult.shopwareId,
+                          removed: mediaCleanup.removed,
+                          kept: mediaCleanup.kept,
+                        });
+                      }
+                    }
                   }
                 } else {
                   result.itemsFailed++;

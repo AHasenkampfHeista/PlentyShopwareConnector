@@ -694,6 +694,31 @@ export class MockShopwareClient implements IShopwareClient {
   }
 
   /**
+   * Get product media - mock returns empty array
+   */
+  async getProductMedia(_productId: string): Promise<Array<{ id: string; mediaId: string; position: number }>> {
+    return [];
+  }
+
+  /**
+   * Delete product media - mock implementation
+   */
+  async deleteProductMedia(productMediaIds: string[]): Promise<{ success: boolean; deleted: number; errors: string[] }> {
+    this.log.info('Mock Shopware: Deleting product media', { count: productMediaIds.length });
+    return { success: true, deleted: productMediaIds.length, errors: [] };
+  }
+
+  /**
+   * Sync product media - mock implementation
+   */
+  async syncProductMedia(
+    _productId: string,
+    newProductMediaIds: string[]
+  ): Promise<{ removed: number; kept: number; errors: string[] }> {
+    return { removed: 0, kept: newProductMediaIds.length, errors: [] };
+  }
+
+  /**
    * Test connection - always succeeds for mock
    */
   async testConnection(): Promise<boolean> {
@@ -1389,7 +1414,12 @@ export class MockShopwareClient implements IShopwareClient {
    * Create a property group
    */
   async createPropertyGroup(group: ShopwarePropertyGroup): Promise<ShopwareSyncResult> {
-    this.log.info('Mock Shopware: Creating property group', { name: group.name });
+    this.log.info('Mock Shopware: Creating property group', { name: group.name, customFields: group.customFields });
+
+    // Extract plentyPropertyId from customFields if it's a PROPERTY type
+    const plentyPropertyId = group.customFields?.plentySourceType === 'PROPERTY'
+      ? group.customFields?.plentySourceId as number
+      : undefined;
 
     const created = await this.prisma.mockShopwarePropertyGroup.create({
       data: {
@@ -1400,6 +1430,8 @@ export class MockShopwareClient implements IShopwareClient {
         sortingType: group.sortingType || 'alphanumeric',
         position: group.position ?? 0,
         plentyAttributeId: group._plentyAttributeId,
+        plentyPropertyId: plentyPropertyId,
+        customFields: group.customFields as unknown as object || null,
         translations: group.translations as unknown as object || {},
         rawShopwareData: group as unknown as object,
       },
@@ -1420,18 +1452,27 @@ export class MockShopwareClient implements IShopwareClient {
     id: string,
     group: Partial<ShopwarePropertyGroup>
   ): Promise<ShopwareSyncResult> {
-    this.log.info('Mock Shopware: Updating property group', { id });
+    this.log.info('Mock Shopware: Updating property group', { id, customFields: group.customFields });
+
+    // Build update data object, only including fields that are defined
+    const updateData: Record<string, unknown> = {};
+    if (group.name !== undefined) updateData.name = group.name;
+    if (group.displayType !== undefined) updateData.displayType = group.displayType;
+    if (group.sortingType !== undefined) updateData.sortingType = group.sortingType;
+    if (group.position !== undefined) updateData.position = group.position;
+    if (group.translations !== undefined) updateData.translations = group.translations as unknown as object;
+    if (group.customFields !== undefined) updateData.customFields = group.customFields as unknown as object;
+
+    // Extract plentyPropertyId from customFields if it's a PROPERTY type
+    if (group.customFields?.plentySourceType === 'PROPERTY') {
+      updateData.plentyPropertyId = group.customFields.plentySourceId as number;
+    }
+
+    updateData.rawShopwareData = group as unknown as object;
 
     const updated = await this.prisma.mockShopwarePropertyGroup.update({
       where: { id },
-      data: {
-        name: group.name,
-        displayType: group.displayType,
-        sortingType: group.sortingType,
-        position: group.position,
-        translations: group.translations as unknown as object,
-        rawShopwareData: group as unknown as object,
-      },
+      data: updateData,
     });
 
     return {
@@ -1461,7 +1502,9 @@ export class MockShopwareClient implements IShopwareClient {
       sortingType: group.sortingType,
       position: group.position,
       translations: group.translations as Record<string, { name: string; description?: string }>,
+      customFields: group.customFields as { plentySourceType?: 'ATTRIBUTE' | 'PROPERTY'; plentySourceId?: number } || undefined,
       _plentyAttributeId: group.plentyAttributeId || undefined,
+      _plentyPropertyId: group.plentyPropertyId || undefined,
     };
   }
 
@@ -1496,6 +1539,8 @@ export class MockShopwareClient implements IShopwareClient {
         mediaId: option.mediaId,
         plentyAttributeId: option._plentyAttributeId,
         plentyAttributeValueId: option._plentyAttributeValueId,
+        plentyPropertyId: option._plentyPropertyId,
+        plentySelectionId: option._plentyPropertySelectionId,
         translations: option.translations as unknown as object || {},
         rawShopwareData: option as unknown as object,
       },
@@ -1518,17 +1563,22 @@ export class MockShopwareClient implements IShopwareClient {
   ): Promise<ShopwareSyncResult> {
     this.log.info('Mock Shopware: Updating property option', { id });
 
+    // Build update data object, only including fields that are defined
+    const updateData: Record<string, unknown> = {};
+    if (option.groupId !== undefined) updateData.propertyGroupId = option.groupId;
+    if (option.name !== undefined) updateData.name = option.name;
+    if (option.position !== undefined) updateData.position = option.position;
+    if (option.colorHexCode !== undefined) updateData.colorHexCode = option.colorHexCode;
+    if (option.mediaId !== undefined) updateData.mediaId = option.mediaId;
+    if (option.translations !== undefined) updateData.translations = option.translations as unknown as object;
+    if (option._plentyPropertyId !== undefined) updateData.plentyPropertyId = option._plentyPropertyId;
+    if (option._plentyPropertySelectionId !== undefined) updateData.plentySelectionId = option._plentyPropertySelectionId;
+
+    updateData.rawShopwareData = option as unknown as object;
+
     const updated = await this.prisma.mockShopwarePropertyOption.update({
       where: { id },
-      data: {
-        propertyGroupId: option.groupId,
-        name: option.name,
-        position: option.position,
-        colorHexCode: option.colorHexCode,
-        mediaId: option.mediaId,
-        translations: option.translations as unknown as object,
-        rawShopwareData: option as unknown as object,
-      },
+      data: updateData,
     });
 
     return {
@@ -1561,6 +1611,8 @@ export class MockShopwareClient implements IShopwareClient {
       translations: option.translations as Record<string, { name: string }>,
       _plentyAttributeId: option.plentyAttributeId || undefined,
       _plentyAttributeValueId: option.plentyAttributeValueId || undefined,
+      _plentyPropertyId: option.plentyPropertyId || undefined,
+      _plentyPropertySelectionId: option.plentySelectionId || undefined,
     };
   }
 

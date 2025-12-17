@@ -729,6 +729,10 @@ model MockShopwarePropertyGroup {
 
   // Plenty reference
   plentyAttributeId   Int?     @map("plenty_attribute_id")
+  plentyPropertyId    Int?     @map("plenty_property_id")
+
+  // Custom fields for Plenty tracking (plentySourceType, plentySourceId)
+  customFields        Json?    @map("custom_fields")
 
   // Translations stored as JSON: { "de": "Farbe", "en": "Color" }
   translations        Json?
@@ -742,6 +746,7 @@ model MockShopwarePropertyGroup {
 
   @@unique([tenantId, plentyAttributeId])
   @@index([tenantId])
+  @@index([tenantId, plentyPropertyId])
   @@map("mock_shopware_property_groups")
 }
 
@@ -762,6 +767,11 @@ model MockShopwarePropertyOption {
   // Plenty reference
   plentyAttributeId        Int?     @map("plenty_attribute_id")
   plentyAttributeValueId   Int?     @map("plenty_attribute_value_id")
+  plentyPropertyId         Int?     @map("plenty_property_id")
+  plentySelectionId        Int?     @map("plenty_selection_id")
+
+  // Custom fields for Plenty tracking
+  customFields             Json?    @map("custom_fields")
 
   // Translations stored as JSON: { "de": "rot", "en": "red" }
   translations             Json?
@@ -776,6 +786,7 @@ model MockShopwarePropertyOption {
   @@unique([tenantId, plentyAttributeValueId])
   @@index([tenantId, propertyGroupId])
   @@index([tenantId, plentyAttributeId])
+  @@index([tenantId, plentyPropertyId])
   @@map("mock_shopware_property_options")
 }
 

@@ -538,6 +538,108 @@ export class ShopwareClient implements IShopwareClient {
   }
 
   /**
+   * Get all product_media entries for a product
+   * Returns the product_media IDs and their associated media IDs
+   */
+  async getProductMedia(productId: string): Promise<Array<{ id: string; mediaId: string; position: number }>> {
+    try {
+      const response = await this.http.post('/api/search/product-media', {
+        filter: [
+          {
+            type: 'equals',
+            field: 'productId',
+            value: productId,
+          },
+        ],
+        limit: 500,
+      });
+
+      const productMedia = response.data?.data || [];
+      return productMedia.map((pm: { id: string; mediaId: string; position: number }) => ({
+        id: pm.id,
+        mediaId: pm.mediaId,
+        position: pm.position,
+      }));
+    } catch (error) {
+      this.log.warn('Failed to get product media', { productId, error: this.extractErrorMessage(error) });
+      return [];
+    }
+  }
+
+  /**
+   * Delete product_media entries by their IDs
+   * This removes the association between product and media, not the media itself
+   */
+  async deleteProductMedia(productMediaIds: string[]): Promise<{ success: boolean; deleted: number; errors: string[] }> {
+    if (productMediaIds.length === 0) {
+      return { success: true, deleted: 0, errors: [] };
+    }
+
+    try {
+      this.log.info('Deleting product_media entries', { count: productMediaIds.length, ids: productMediaIds });
+
+      // Use sync API with delete action
+      await this.http.post('/api/_action/sync', {
+        'delete-product-media': {
+          entity: 'product_media',
+          action: 'delete',
+          payload: productMediaIds.map(id => ({ id })),
+        },
+      });
+
+      this.log.info('Successfully deleted product_media entries', { count: productMediaIds.length });
+      return { success: true, deleted: productMediaIds.length, errors: [] };
+    } catch (error) {
+      const errorMessage = this.extractErrorMessage(error);
+      this.log.error('Failed to delete product_media entries', { error: errorMessage, ids: productMediaIds });
+      return { success: false, deleted: 0, errors: [errorMessage] };
+    }
+  }
+
+  /**
+   * Sync product media - adds new media and removes media no longer present
+   * @param productId - Shopware product ID
+   * @param newMediaIds - Array of product_media IDs that should exist (from current sync)
+   * @returns Object with added and removed counts
+   */
+  async syncProductMedia(
+    productId: string,
+    newProductMediaIds: string[]
+  ): Promise<{ removed: number; kept: number; errors: string[] }> {
+    try {
+      // Get current product_media entries
+      const currentMedia = await this.getProductMedia(productId);
+      const currentIds = new Set(currentMedia.map(pm => pm.id));
+      const newIds = new Set(newProductMediaIds);
+
+      // Find IDs to delete (in current but not in new)
+      const idsToDelete = [...currentIds].filter(id => !newIds.has(id));
+
+      if (idsToDelete.length > 0) {
+        this.log.info('Removing orphaned product_media', {
+          productId,
+          removingCount: idsToDelete.length,
+          removingIds: idsToDelete,
+          keepingCount: newProductMediaIds.length,
+        });
+
+        const deleteResult = await this.deleteProductMedia(idsToDelete);
+        return {
+          removed: deleteResult.deleted,
+          kept: newProductMediaIds.length,
+          errors: deleteResult.errors,
+        };
+      }
+
+      return { removed: 0, kept: newProductMediaIds.length, errors: [] };
+    } catch (error) {
+      const errorMessage = this.extractErrorMessage(error);
+      this.log.error('Failed to sync product media', { productId, error: errorMessage });
+      return { removed: 0, kept: 0, errors: [errorMessage] };
+    }
+  }
+
+  /**
    * Test connection to Shopware API
    */
   async testConnection(): Promise<boolean> {
@@ -803,11 +905,15 @@ export class ShopwareClient implements IShopwareClient {
       id: product.id || this.generateUuid(),
     }));
 
-    // Debug: log the first product payload to see what's being sent
+    // Log the first product payload to see what's being sent
     if (upsertPayload.length > 0) {
-      this.log.debug('Product payload sample', {
-        productNumber: upsertPayload[0].productNumber,
-        payload: JSON.stringify(upsertPayload[0], null, 2),
+      const firstPayload = upsertPayload[0] as Record<string, unknown>;
+      const mediaArray = firstPayload.media as unknown[] | undefined;
+      this.log.info('Product payload sample', {
+        productNumber: firstPayload.productNumber,
+        hasMedia: !!mediaArray,
+        mediaCount: mediaArray?.length || 0,
+        hasCoverId: !!firstPayload.coverId,
       });
     }
 
@@ -858,7 +964,13 @@ export class ShopwareClient implements IShopwareClient {
       };
     } catch (error) {
       const errorMessage = this.extractErrorMessage(error);
-      this.log.error('Bulk sync failed', { error: errorMessage });
+      const axiosError = error as { response?: { data?: unknown; status?: number } };
+
+      this.log.error('Bulk sync failed', {
+        error: errorMessage,
+        status: axiosError.response?.status,
+        responseData: JSON.stringify(axiosError.response?.data || {}),
+      });
 
       // Return all as failed
       return {
@@ -1194,8 +1306,30 @@ export class ShopwareClient implements IShopwareClient {
   async bulkSyncPropertyGroups(groups: ShopwarePropertyGroup[]): Promise<ShopwareBulkSyncResult> {
     this.log.info('Bulk syncing property groups', { count: groups.length });
 
+    // Log sample customFields for debugging
+    const groupsWithCustomFields = groups.filter((g) => g.customFields);
+    if (groupsWithCustomFields.length > 0) {
+      this.log.debug('Property groups with customFields', {
+        count: groupsWithCustomFields.length,
+        sample: groupsWithCustomFields.slice(0, 3).map((g) => ({
+          id: g.id,
+          name: g.name,
+          customFields: g.customFields,
+        })),
+      });
+    } else {
+      this.log.warn('No property groups have customFields set');
+    }
+
     try {
       const payload = groups.map((g) => this.buildPropertyGroupPayload(g));
+
+      // Log built payload to verify customFields are included
+      const payloadWithCustomFields = payload.filter((p) => p.customFields);
+      this.log.debug('Built payload with customFields', {
+        count: payloadWithCustomFields.length,
+        sample: payloadWithCustomFields.slice(0, 3),
+      });
 
       await this.http.post('/api/_action/sync', {
         'upsert-property-group': {
@@ -1382,35 +1516,31 @@ export class ShopwareClient implements IShopwareClient {
 
   /**
    * Ensure the custom field set for Plenty connector exists
-   * Creates the custom field set with plentySourceType and plentySourceId fields if not exists
+   * Creates/updates the custom field set with plentySourceType and plentySourceId fields
+   * Uses deterministic UUIDs so upsert can update existing records
    */
   async ensurePlentyCustomFieldSet(): Promise<void> {
-    const customFieldSetId = 'plenty_connector_property_group';
+    const customFieldSetName = 'plenty_connector_property_group';
+
+    // Use deterministic UUIDs based on fixed seeds so upsert works correctly
+    // These are stable UUIDs that won't change between runs
+    const customFieldSetUuid = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4'; // Fixed UUID for the set
+    const sourceTypeFieldUuid = 'b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5'; // Fixed UUID for plentySourceType
+    const sourceIdFieldUuid = 'c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6';   // Fixed UUID for plentySourceId
+    const relationUuid = 'd4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1';        // Fixed UUID for relation
 
     try {
-      // Check if custom field set already exists
-      const response = await this.http.post('/api/search/custom-field-set', {
-        filter: [
-          { type: 'equals', field: 'name', value: customFieldSetId },
-        ],
-      });
+      this.log.info('Ensuring Plenty custom field set exists with correct fields');
 
-      if (response.data?.data?.length > 0) {
-        this.log.debug('Plenty custom field set already exists');
-        return;
-      }
-
-      this.log.info('Creating Plenty custom field set');
-
-      // Create the custom field set with fields and relations
+      // Always upsert to ensure the set and fields exist with correct configuration
       await this.http.post('/api/_action/sync', {
-        'create-custom-field-set': {
+        'upsert-custom-field-set': {
           entity: 'custom_field_set',
           action: 'upsert',
           payload: [
             {
-              id: this.generateUuid(),
-              name: customFieldSetId,
+              id: customFieldSetUuid,
+              name: customFieldSetName,
               config: {
                 label: {
                   'en-GB': 'Plenty Connector',
@@ -1422,7 +1552,7 @@ export class ShopwareClient implements IShopwareClient {
               position: 1,
               customFields: [
                 {
-                  id: this.generateUuid(),
+                  id: sourceTypeFieldUuid,
                   name: 'plentySourceType',
                   type: 'select',
                   config: {
@@ -1444,7 +1574,7 @@ export class ShopwareClient implements IShopwareClient {
                   active: true,
                 },
                 {
-                  id: this.generateUuid(),
+                  id: sourceIdFieldUuid,
                   name: 'plentySourceId',
                   type: 'int',
                   config: {
@@ -1464,7 +1594,7 @@ export class ShopwareClient implements IShopwareClient {
               ],
               relations: [
                 {
-                  id: this.generateUuid(),
+                  id: relationUuid,
                   entityName: 'property_group',
                 },
               ],
@@ -1473,10 +1603,10 @@ export class ShopwareClient implements IShopwareClient {
         },
       });
 
-      this.log.info('Plenty custom field set created successfully');
+      this.log.info('Plenty custom field set ensured successfully');
     } catch (error) {
       const errorMessage = this.extractErrorMessage(error);
-      this.log.error('Failed to create Plenty custom field set', { error: errorMessage });
+      this.log.error('Failed to ensure Plenty custom field set', { error: errorMessage });
       // Don't throw - custom fields are optional, sync should continue
     }
   }
@@ -1954,6 +2084,40 @@ export class ShopwareClient implements IShopwareClient {
       payload.properties = product.properties.map((p) => ({ id: p.id }));
     }
     if (product.translations) payload.translations = product.translations;
+    // Sales channel visibility (required for products to appear in storefront)
+    if (product.visibilities && product.visibilities.length > 0) {
+      payload.visibilities = product.visibilities.map((v) => ({
+        salesChannelId: v.salesChannelId,
+        visibility: v.visibility,
+      }));
+    }
+
+    // Product media (images)
+    // Note: We check if media is explicitly set (even if empty) to support clearing media
+    // When media is undefined, we don't touch existing media
+    // When media is an empty array, we clear media (useful for child variants to inherit from parent)
+    // When media has items, we set them
+    if (product.media !== undefined) {
+      if (product.media.length > 0) {
+        payload.media = product.media.map((m, index) => ({
+          id: m.id || this.generateUuid(),
+          mediaId: m.mediaId,
+          position: m.position ?? index,
+        }));
+        // Set cover image (first image by position)
+        const sortedMedia = [...payload.media].sort(
+          (a: { position: number }, b: { position: number }) => a.position - b.position
+        );
+        if (sortedMedia.length > 0) {
+          payload.coverId = sortedMedia[0].id;
+        }
+      } else {
+        // Explicitly set empty media array to clear existing media
+        // This prevents inheritance - the variant will have no images of its own
+        payload.media = [];
+        payload.coverId = null;
+      }
+    }
 
     // Remove internal tracking fields
     delete payload._plentyItemId;
