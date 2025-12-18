@@ -307,6 +307,25 @@ export interface IShopwareClient {
   ): Promise<{ removed: number; kept: number; errors: string[] }>;
 
   /**
+   * Sync product properties - removes properties no longer present in Plenty
+   * Ensures the product's properties match exactly what's in Plenty
+   */
+  syncProductProperties(
+    productId: string,
+    expectedPropertyOptionIds: string[]
+  ): Promise<{ removed: number; kept: number; errors: string[] }>;
+
+  /**
+   * Sync configurator settings for a parent product
+   * Creates product_configurator_setting entries for each option used by variants
+   * This is required for Shopware to properly calculate displayGroup for variants
+   */
+  syncConfiguratorSettings(
+    parentProductId: string,
+    optionIds: string[]
+  ): Promise<{ success: boolean; created: number; errors: string[] }>;
+
+  /**
    * Test connection to Shopware API
    */
   testConnection(): Promise<boolean>;

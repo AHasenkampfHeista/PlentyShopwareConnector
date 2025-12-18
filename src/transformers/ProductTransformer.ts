@@ -287,8 +287,8 @@ export class ProductTransformer {
     );
 
     for (const prop of nonSelectionProperties) {
-      // Extract value
-      const value = this.extractNonSelectionPropertyValue(prop);
+      // Extract value (resolves selection IDs to actual names for selection-type properties)
+      const value = await this.extractPropertyValue(prop, tenantId);
       if (!value) continue;
 
       const valueHash = propertyMappingService.generateValueHash(prop.propertyId, value);
@@ -315,26 +315,94 @@ export class ProductTransformer {
   }
 
   /**
-   * Extract value from non-selection property
+   * Extract value from property, resolving selection IDs to actual names
+   * For selection-type properties: looks up the selection ID in cached property to get the actual name
+   * For non-selection properties: returns the raw value from relationValues
    */
-  private extractNonSelectionPropertyValue(prop: PlentyItemProperty): string | null {
+  private async extractPropertyValue(
+    prop: PlentyItemProperty,
+    tenantId: string
+  ): Promise<string | null> {
     if (!prop.relationValues || prop.relationValues.length === 0) {
       return null;
     }
 
-    // Prefer German, then English, then first available
+    // Get raw value from relationValues (prefer de, then en, then first available)
     const preferredLangs = ['de', 'en'];
+    let rawValue: string | null = null;
+    let valueLang = 'de';
 
     for (const lang of preferredLangs) {
       const langValue = prop.relationValues.find(
         (rv) => rv.lang.toLowerCase() === lang
       );
       if (langValue?.value) {
-        return langValue.value;
+        rawValue = langValue.value;
+        valueLang = lang;
+        break;
       }
     }
 
-    return prop.relationValues[0]?.value || null;
+    if (!rawValue) {
+      rawValue = prop.relationValues[0]?.value || null;
+      valueLang = prop.relationValues[0]?.lang || 'de';
+    }
+
+    if (!rawValue) {
+      return null;
+    }
+
+    // Check if this is a selection-type property by looking up the cached property
+    const cachedProperty = await this.prisma.plentyProperty.findUnique({
+      where: {
+        tenantId_id: {
+          tenantId,
+          id: prop.propertyId,
+        },
+      },
+    });
+
+    if (cachedProperty && (cachedProperty.cast === 'selection' || cachedProperty.cast === 'multiSelection')) {
+      // For selection properties, the rawValue is the selection ID - look up the actual name
+      const selectionId = parseInt(rawValue, 10);
+
+      if (!isNaN(selectionId) && cachedProperty.selections) {
+        const selections = cachedProperty.selections as Array<{
+          id: number;
+          values?: Record<string, string>;
+          position?: number;
+        }>;
+
+        const selection = selections.find((s) => s.id === selectionId);
+
+        if (selection?.values) {
+          // Get name in preferred language
+          const selectionName = selection.values[valueLang] ||
+                               selection.values['de'] ||
+                               selection.values['en'] ||
+                               Object.values(selection.values)[0];
+
+          if (selectionName) {
+            this.log.debug('Resolved selection value in transformer', {
+              propertyId: prop.propertyId,
+              selectionId,
+              rawValue,
+              resolvedName: selectionName,
+            });
+            return selectionName;
+          }
+        }
+
+        this.log.warn('Selection not found in cached property (transformer)', {
+          propertyId: prop.propertyId,
+          selectionId,
+          availableSelections: selections.map(s => s.id),
+        });
+      }
+    }
+
+    // For non-selection properties or if lookup failed, return the raw value
+    return rawValue;
   }
 
   // ============================================

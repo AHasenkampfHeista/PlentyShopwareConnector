@@ -719,6 +719,26 @@ export class MockShopwareClient implements IShopwareClient {
   }
 
   /**
+   * Sync product properties - mock implementation
+   */
+  async syncProductProperties(
+    _productId: string,
+    expectedPropertyOptionIds: string[]
+  ): Promise<{ removed: number; kept: number; errors: string[] }> {
+    return { removed: 0, kept: expectedPropertyOptionIds.length, errors: [] };
+  }
+
+  /**
+   * Sync configurator settings for a parent product (mock implementation)
+   */
+  async syncConfiguratorSettings(
+    _parentProductId: string,
+    optionIds: string[]
+  ): Promise<{ success: boolean; created: number; errors: string[] }> {
+    return { success: true, created: optionIds.length, errors: [] };
+  }
+
+  /**
    * Test connection - always succeeds for mock
    */
   async testConnection(): Promise<boolean> {

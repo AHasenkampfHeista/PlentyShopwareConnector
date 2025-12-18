@@ -24,6 +24,7 @@ export class CategorySyncService {
   private configService: TenantConfigService;
   private categoryCache: Map<number, PlentyCategory> = new Map();
   private shopwareRootCategoryId: string | null = null;
+  private shopwareDefaultCmsPageId: string | null = null;
   private log = createLogger({ service: 'CategorySyncService' });
 
   constructor() {
@@ -70,6 +71,21 @@ export class CategorySyncService {
         this.log.warn(
           'No shopwareRootCategoryId configured. Categories will be created at root level. ' +
           'Set shopwareRootCategoryId in tenant_configs to place categories under your navigation root.'
+        );
+      }
+    }
+
+    // Load Shopware default CMS page ID from config (required for product listing)
+    if (this.shopwareDefaultCmsPageId === null) {
+      this.shopwareDefaultCmsPageId = await this.configService.getShopwareDefaultCmsPageId(tenantId) || '';
+      if (this.shopwareDefaultCmsPageId) {
+        this.log.info('Using Shopware CMS page for categories', {
+          cmsPageId: this.shopwareDefaultCmsPageId,
+        });
+      } else {
+        this.log.warn(
+          'No shopwareDefaultCmsPageId configured. Categories will not display products! ' +
+          'Set shopwareDefaultCmsPageId in tenant_configs to your "Default listing layout" CMS page ID.'
         );
       }
     }
@@ -248,6 +264,7 @@ export class CategorySyncService {
       active: true,
       visible: true,
       level: plentyCategory.level,
+      cmsPageId: this.shopwareDefaultCmsPageId || undefined, // Required for products to display
       _plentyCategoryId: plentyCategory.id,
     };
   }

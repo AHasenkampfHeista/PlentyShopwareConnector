@@ -640,6 +640,160 @@ export class ShopwareClient implements IShopwareClient {
   }
 
   /**
+   * Sync product properties - removes properties no longer present in Plenty
+   * This ensures the product's properties match exactly what's in Plenty
+   * @param productId - Shopware product ID
+   * @param expectedPropertyOptionIds - Array of property option IDs that should be on the product
+   * @returns Object with removed and kept counts
+   */
+  async syncProductProperties(
+    productId: string,
+    expectedPropertyOptionIds: string[]
+  ): Promise<{ removed: number; kept: number; errors: string[] }> {
+    try {
+      // Get current properties on the product using search endpoint (POST for proper associations)
+      const productResponse = await this.http.post('/api/search/product', {
+        filter: [
+          { type: 'equals', field: 'id', value: productId },
+        ],
+        associations: {
+          properties: {},
+        },
+        limit: 1,
+      });
+
+      const product = productResponse.data?.data?.[0];
+      const currentProperties = product?.properties || [];
+      const currentPropertyIds = new Set<string>(
+        currentProperties.map((p: { id: string }) => p.id)
+      );
+      const expectedIds = new Set(expectedPropertyOptionIds);
+
+      this.log.debug('syncProductProperties: comparing properties', {
+        productId,
+        currentPropertyIds: [...currentPropertyIds],
+        expectedPropertyIds: expectedPropertyOptionIds,
+      });
+
+      // Find properties to remove (in current but not in expected)
+      const idsToRemove = [...currentPropertyIds].filter(id => !expectedIds.has(id));
+
+      if (idsToRemove.length === 0) {
+        this.log.debug('No orphaned properties to remove', {
+          productId,
+          currentCount: currentPropertyIds.size,
+          expectedCount: expectedPropertyOptionIds.length,
+        });
+        return { removed: 0, kept: expectedPropertyOptionIds.length, errors: [] };
+      }
+
+      this.log.info('Removing orphaned product properties', {
+        productId,
+        removingCount: idsToRemove.length,
+        removingIds: idsToRemove,
+        keepingCount: expectedPropertyOptionIds.length,
+      });
+
+      // Remove the old property associations using sync API with delete
+      // We need to delete the product_property entries (many-to-many relationship)
+      await this.http.post('/api/_action/sync', {
+        'delete-product-property': {
+          entity: 'product_property',
+          action: 'delete',
+          payload: idsToRemove.map(propertyId => ({
+            productId: productId,
+            optionId: propertyId,
+          })),
+        },
+      });
+
+      this.log.info('Successfully removed orphaned product properties', {
+        productId,
+        removedCount: idsToRemove.length,
+      });
+
+      return {
+        removed: idsToRemove.length,
+        kept: expectedPropertyOptionIds.length,
+        errors: [],
+      };
+    } catch (error) {
+      const errorMessage = this.extractErrorMessage(error);
+      this.log.error('Failed to sync product properties', { productId, error: errorMessage });
+      return { removed: 0, kept: 0, errors: [errorMessage] };
+    }
+  }
+
+  /**
+   * Sync configurator settings for a parent product
+   * Creates product_configurator_setting entries for each option used by variants
+   * This is required for Shopware to properly calculate displayGroup for variants
+   */
+  async syncConfiguratorSettings(
+    parentProductId: string,
+    optionIds: string[]
+  ): Promise<{ success: boolean; created: number; errors: string[] }> {
+    if (optionIds.length === 0) {
+      return { success: true, created: 0, errors: [] };
+    }
+
+    try {
+      this.log.info('Syncing configurator settings', {
+        parentProductId,
+        optionCount: optionIds.length,
+      });
+
+      // Get existing configurator settings
+      const existingResponse = await this.http.post('/api/search/product-configurator-setting', {
+        filter: [
+          { type: 'equals', field: 'productId', value: parentProductId },
+        ],
+        limit: 500,
+      });
+
+      const existingOptionIds = new Set<string>(
+        (existingResponse.data?.data || []).map((setting: { optionId: string }) => setting.optionId)
+      );
+
+      // Filter to only new options
+      const newOptionIds = optionIds.filter(id => !existingOptionIds.has(id));
+
+      if (newOptionIds.length === 0) {
+        this.log.debug('All configurator settings already exist', { parentProductId });
+        return { success: true, created: 0, errors: [] };
+      }
+
+      // Create configurator settings for new options using sync API
+      const payload = newOptionIds.map(optionId => ({
+        productId: parentProductId,
+        optionId: optionId,
+      }));
+
+      await this.http.post('/api/_action/sync', {
+        'create-configurator-settings': {
+          entity: 'product_configurator_setting',
+          action: 'upsert',
+          payload,
+        },
+      });
+
+      this.log.info('Created configurator settings', {
+        parentProductId,
+        created: newOptionIds.length,
+      });
+
+      return { success: true, created: newOptionIds.length, errors: [] };
+    } catch (error) {
+      const errorMessage = this.extractErrorMessage(error);
+      this.log.error('Failed to sync configurator settings', {
+        parentProductId,
+        error: errorMessage,
+      });
+      return { success: false, created: 0, errors: [errorMessage] };
+    }
+  }
+
+  /**
    * Test connection to Shopware API
    */
   async testConnection(): Promise<boolean> {
@@ -2322,6 +2476,7 @@ export class ShopwareClient implements IShopwareClient {
     if (category.name !== undefined) payload.name = category.name;
     if (category.active !== undefined) payload.active = category.active;
     if (category.visible !== undefined) payload.visible = category.visible;
+    if (category.cmsPageId) payload.cmsPageId = category.cmsPageId;
     if (category.translations) payload.translations = category.translations;
 
     // Remove internal tracking fields

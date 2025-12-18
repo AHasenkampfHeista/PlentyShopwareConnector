@@ -27,6 +27,7 @@ export const ConfigKeys = {
 
   // Category Configuration
   SHOPWARE_ROOT_CATEGORY_ID: 'shopwareRootCategoryId', // Shopware navigation root category UUID - all Plenty categories will be children of this
+  SHOPWARE_DEFAULT_CMS_PAGE_ID: 'shopwareDefaultCmsPageId', // Shopware CMS page UUID for product listings (required for products to show in categories)
 
   // Sales Channel Configuration
   SHOPWARE_SALES_CHANNEL_ID: 'shopwareSalesChannelId', // Shopware sales channel UUID - products will be visible in this channel
@@ -419,6 +420,27 @@ export class TenantConfigService {
       ConfigKeys.SHOPWARE_ROOT_CATEGORY_ID,
       categoryId,
       'Shopware navigation root category - all Plenty categories become children of this'
+    );
+  }
+
+  /**
+   * Get Shopware default CMS page ID for categories
+   * This is required for products to display in category listings
+   * Returns null if not configured
+   */
+  async getShopwareDefaultCmsPageId(tenantId: string): Promise<string | null> {
+    return this.getString(tenantId, ConfigKeys.SHOPWARE_DEFAULT_CMS_PAGE_ID);
+  }
+
+  /**
+   * Set Shopware default CMS page ID
+   */
+  async setShopwareDefaultCmsPageId(tenantId: string, cmsPageId: string): Promise<void> {
+    await this.set(
+      tenantId,
+      ConfigKeys.SHOPWARE_DEFAULT_CMS_PAGE_ID,
+      cmsPageId,
+      'Shopware CMS page for product listings - required for products to appear in categories'
     );
   }
 

@@ -306,12 +306,23 @@ export class PropertySyncService {
 
       // Process each property value
       for (const prop of propsWithSameId) {
-        // Get value from relationValues
-        const value = this.extractPropertyValue(prop);
+        // Get value from relationValues (resolves selection IDs to actual names for selection-type properties)
+        const value = await this.extractPropertyValue(prop, tenantId, propertyId);
 
         if (value === null || value === undefined || value === '') {
+          this.log.debug('Skipping property with empty value', {
+            propertyId,
+            relationValuesCount: prop.relationValues?.length || 0,
+          });
           continue;
         }
+
+        this.log.info('Processing property value for auto-creation', {
+          propertyId,
+          value: String(value).substring(0, 50),
+          hasPropertyMapping: !!propertyMapping,
+          shopwareGroupId: propertyMapping?.shopwarePropertyGroupId,
+        });
 
         const valueHash = this.mappingService.generateValueHash(propertyId, String(value));
 
@@ -323,8 +334,20 @@ export class PropertySyncService {
         );
 
         if (existingMappings[valueHash]) {
+          this.log.debug('Value mapping already exists, skipping creation', {
+            propertyId,
+            value: String(value).substring(0, 50),
+            valueHash,
+            shopwareOptionId: existingMappings[valueHash].shopwarePropertyOptionId,
+          });
           valueMappings[valueHash] = existingMappings[valueHash];
         } else {
+          this.log.info('No existing value mapping, creating new property option', {
+            propertyId,
+            value: String(value).substring(0, 50),
+            valueHash,
+            shopwareGroupId: propertyMapping.shopwarePropertyGroupId,
+          });
           // Create new option in Shopware
           try {
             const shopwareOptionId = await this.createPropertyOptionForValue(
@@ -376,27 +399,88 @@ export class PropertySyncService {
   }
 
   /**
-   * Extract the actual value from a non-selection property
+   * Extract the actual value from a property
+   * For selection-type properties: looks up the selection ID in cached property to get the actual name
+   * For non-selection properties: returns the raw value from relationValues
    */
-  private extractPropertyValue(prop: PlentyItemProperty): string | null {
+  private async extractPropertyValue(
+    prop: PlentyItemProperty,
+    tenantId: string,
+    propertyId: number
+  ): Promise<string | null> {
     if (!prop.relationValues || prop.relationValues.length === 0) {
       return null;
     }
 
-    // Try to find value in preferred languages (de, en, then first available)
+    // Get raw value from relationValues (prefer de, then en, then first available)
     const preferredLangs = ['de', 'en'];
+    let rawValue: string | null = null;
+    let valueLang = 'de';
 
     for (const lang of preferredLangs) {
       const langValue = prop.relationValues.find(
         (rv) => rv.lang.toLowerCase() === lang
       );
       if (langValue?.value) {
-        return langValue.value;
+        rawValue = langValue.value;
+        valueLang = lang;
+        break;
       }
     }
 
-    // Fall back to first available value
-    return prop.relationValues[0]?.value || null;
+    if (!rawValue) {
+      rawValue = prop.relationValues[0]?.value || null;
+      valueLang = prop.relationValues[0]?.lang || 'de';
+    }
+
+    if (!rawValue) {
+      return null;
+    }
+
+    // Check if this is a selection-type property by looking up the cached property
+    const cachedProperty = await this.getCachedPlentyProperty(tenantId, propertyId);
+
+    if (cachedProperty && (cachedProperty.cast === 'selection' || cachedProperty.cast === 'multiSelection')) {
+      // For selection properties, the rawValue is the selection ID - look up the actual name
+      const selectionId = parseInt(rawValue, 10);
+
+      if (!isNaN(selectionId) && cachedProperty.selections) {
+        const selections = cachedProperty.selections as Array<{
+          id: number;
+          values?: Record<string, string>;
+          position?: number;
+        }>;
+
+        const selection = selections.find((s) => s.id === selectionId);
+
+        if (selection?.values) {
+          // Get name in preferred language
+          const selectionName = selection.values[valueLang] ||
+                               selection.values['de'] ||
+                               selection.values['en'] ||
+                               Object.values(selection.values)[0];
+
+          if (selectionName) {
+            this.log.debug('Resolved selection value', {
+              propertyId,
+              selectionId,
+              rawValue,
+              resolvedName: selectionName,
+            });
+            return selectionName;
+          }
+        }
+
+        this.log.warn('Selection not found in cached property', {
+          propertyId,
+          selectionId,
+          availableSelections: selections.map(s => s.id),
+        });
+      }
+    }
+
+    // For non-selection properties or if lookup failed, return the raw value
+    return rawValue;
   }
 
   /**
@@ -409,6 +493,26 @@ export class PropertySyncService {
     shopwareGroupId: string,
     shopware: IShopwareClient
   ): Promise<string> {
+    // Validate required parameters
+    if (!shopwareGroupId) {
+      throw new Error(
+        `Cannot create property option: missing Shopware group ID for property ${plentyPropertyId}. ` +
+        `Ensure the property group was created during CONFIG sync.`
+      );
+    }
+
+    if (!value || value.trim() === '') {
+      throw new Error(
+        `Cannot create property option: empty value for property ${plentyPropertyId}`
+      );
+    }
+
+    this.log.info('Creating property option in Shopware', {
+      plentyPropertyId,
+      value: value.substring(0, 50),
+      shopwareGroupId,
+    });
+
     // Build translations from the value
     // For non-selection properties, value is the same across languages
     const translations: Record<string, { name: string }> = {
@@ -425,13 +529,31 @@ export class PropertySyncService {
       _plentyPropertyId: plentyPropertyId,
     };
 
+    this.log.debug('Shopware property option payload', {
+      groupId: shopwareOption.groupId,
+      name: shopwareOption.name,
+      position: shopwareOption.position,
+    });
+
     const result = await shopware.createPropertyOption(shopwareOption);
 
     if (!result.success) {
+      this.log.error('Shopware API rejected property option creation', {
+        plentyPropertyId,
+        value: value.substring(0, 50),
+        shopwareGroupId,
+        error: result.error,
+      });
       throw new Error(
         `Failed to create property option in Shopware: ${result.error || 'Unknown error'}`
       );
     }
+
+    this.log.info('Property option created successfully', {
+      plentyPropertyId,
+      value: value.substring(0, 50),
+      shopwareOptionId: result.id,
+    });
 
     return result.id;
   }
@@ -451,12 +573,15 @@ export class PropertySyncService {
     const plentyProperty = await this.getCachedPlentyProperty(tenantId, plentyPropertyId);
 
     if (!plentyProperty) {
-      this.log.warn(
+      const errorMsg =
         `Property ${plentyPropertyId} not found in cache. ` +
-        `This property exists on products but was not returned by Plenty's API during config sync. ` +
-        `To fix: Enable "Webshop visibility" for property ${plentyPropertyId} in Plenty (Setup > Item > Properties), then re-run config sync.`
-      );
-      throw new Error(`Property ${plentyPropertyId} not found in PlentyProperty cache`);
+        `This property exists on products but was not synced during CONFIG sync. ` +
+        `To fix: 1) Run a CONFIG sync to refresh property definitions. ` +
+        `2) If property was recently added in Plenty, ensure "Webshop visibility" is enabled ` +
+        `(Plenty > Setup > Item > Properties > Property ${plentyPropertyId}). ` +
+        `Property OPTIONS cannot be auto-created without the property GROUP existing first.`;
+      this.log.error(errorMsg);
+      throw new Error(errorMsg);
     }
 
     this.log.debug(`Found property in cache: id=${plentyProperty.id}, cast=${plentyProperty.cast}`);

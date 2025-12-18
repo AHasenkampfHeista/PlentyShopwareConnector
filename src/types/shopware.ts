@@ -112,6 +112,7 @@ export interface ShopwareCategory {
   childCount?: number;
   productAssignmentType?: string;
   type?: string;
+  cmsPageId?: string; // CMS page for product listing (required for products to display)
   translations?: Record<string, ShopwareCategoryTranslation>;
 
   // Plenty reference (internal use)

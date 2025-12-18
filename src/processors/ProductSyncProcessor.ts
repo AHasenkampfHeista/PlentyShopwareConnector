@@ -353,6 +353,19 @@ export class ProductSyncProcessor {
                       });
                     }
                   }
+
+                  // Clean up orphaned product properties (properties changed in Plenty)
+                  if (product?.properties !== undefined) {
+                    const expectedPropertyIds = product.properties.map(p => p.id).filter((id): id is string => !!id);
+                    const propertyCleanup = await shopware.syncProductProperties(itemResult.shopwareId, expectedPropertyIds);
+                    if (propertyCleanup.removed > 0) {
+                      log.info('Cleaned up orphaned product properties', {
+                        productId: itemResult.shopwareId,
+                        removed: propertyCleanup.removed,
+                        kept: propertyCleanup.kept,
+                      });
+                    }
+                  }
                 }
               } else {
                 result.itemsFailed++;
@@ -494,6 +507,19 @@ export class ProductSyncProcessor {
                         });
                       }
                     }
+
+                    // Clean up orphaned product properties (properties changed in Plenty)
+                    if (product.properties !== undefined) {
+                      const expectedPropertyIds = product.properties.map(p => p.id).filter((id): id is string => !!id);
+                      const propertyCleanup = await shopware.syncProductProperties(itemResult.shopwareId, expectedPropertyIds);
+                      if (propertyCleanup.removed > 0) {
+                        log.info('Cleaned up orphaned product properties (child)', {
+                          productId: itemResult.shopwareId,
+                          removed: propertyCleanup.removed,
+                          kept: propertyCleanup.kept,
+                        });
+                      }
+                    }
                   }
                 } else {
                   result.itemsFailed++;
@@ -528,6 +554,67 @@ export class ProductSyncProcessor {
         if (childMappingRecords.length > 0) {
           await this.mappingService.upsertMappings(jobData.tenantId, childMappingRecords);
           log.info('Saved child mappings', { count: childMappingRecords.length });
+        }
+
+        // ============================================
+        // PHASE 3: SYNC CONFIGURATOR SETTINGS
+        // ============================================
+        // Collect all options from child variants and create configurator settings on parents
+        // This is required for Shopware to calculate displayGroup properly
+        log.info('Phase 3: Syncing configurator settings for parent products');
+
+        // Group options by parent product ID
+        const parentOptionsMap = new Map<string, Set<string>>();
+
+        for (const { variation, parentShopwareId } of allChildVariations) {
+          if (!parentShopwareId) continue;
+
+          // Get option IDs from the variation's attribute values
+          const optionIds = (variation.variationAttributeValues || [])
+            .map(vav => vav.valueId || vav.attributeValueId)
+            .filter((id): id is number => id !== undefined && id !== null);
+
+          if (optionIds.length === 0) continue;
+
+          // Look up Shopware option IDs from attribute value mappings
+          const { AttributeMappingService } = await import('../services/AttributeMappingService');
+          const attributeMappingService = new AttributeMappingService();
+
+          for (const plentyValueId of optionIds) {
+            const mapping = await attributeMappingService.getAttributeValueMapping(
+              jobData.tenantId,
+              plentyValueId
+            );
+
+            if (mapping?.shopwarePropertyOptionId) {
+              if (!parentOptionsMap.has(parentShopwareId)) {
+                parentOptionsMap.set(parentShopwareId, new Set());
+              }
+              parentOptionsMap.get(parentShopwareId)!.add(mapping.shopwarePropertyOptionId);
+            }
+          }
+        }
+
+        // Create configurator settings for each parent
+        for (const [parentProductId, optionIds] of parentOptionsMap.entries()) {
+          try {
+            const configResult = await shopware.syncConfiguratorSettings(
+              parentProductId,
+              Array.from(optionIds)
+            );
+
+            if (configResult.created > 0) {
+              log.info('Created configurator settings for parent', {
+                parentProductId,
+                optionsCreated: configResult.created,
+              });
+            }
+          } catch (error) {
+            log.warn('Failed to sync configurator settings', {
+              parentProductId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
       }
 
