@@ -909,11 +909,15 @@ export class ShopwareClient implements IShopwareClient {
     if (upsertPayload.length > 0) {
       const firstPayload = upsertPayload[0] as Record<string, unknown>;
       const mediaArray = firstPayload.media as unknown[] | undefined;
+      const customFields = firstPayload.customFields as Record<string, unknown> | undefined;
       this.log.info('Product payload sample', {
         productNumber: firstPayload.productNumber,
         hasMedia: !!mediaArray,
         mediaCount: mediaArray?.length || 0,
         hasCoverId: !!firstPayload.coverId,
+        hasCustomFields: !!customFields,
+        customFieldCount: customFields ? Object.keys(customFields).length : 0,
+        customFields: customFields ? JSON.stringify(customFields) : null,
       });
     }
 
@@ -1611,6 +1615,184 @@ export class ShopwareClient implements IShopwareClient {
     }
   }
 
+  /**
+   * Ensure a custom field set exists with the specified fields
+   * Uses direct API calls - creates set first, then adds fields
+   */
+  async ensureCustomFieldSet(customFieldSet: {
+    id: string;
+    name: string;
+    config?: {
+      label?: Record<string, string>;
+      translated?: boolean;
+    };
+    active?: boolean;
+    global?: boolean;
+    position?: number;
+    customFields?: Array<{
+      id: string;
+      name: string;
+      type: string;
+      config?: Record<string, unknown>;
+      active?: boolean;
+    }>;
+    relations?: Array<{
+      id?: string;
+      entityName: string;
+    }>;
+  }): Promise<ShopwareSyncResult> {
+    try {
+      this.log.info('Ensuring custom field set exists', { name: customFieldSet.name, id: customFieldSet.id });
+
+      // Step 1: Check if custom field set exists
+      let setExists = false;
+      try {
+        const response = await this.http.get(`/api/custom-field-set/${customFieldSet.id}`);
+        setExists = !!response.data?.data;
+      } catch {
+        setExists = false;
+      }
+
+      // Step 2: Create or update the custom field set
+      const setPayload = {
+        id: customFieldSet.id,
+        name: customFieldSet.name,
+        config: customFieldSet.config || {
+          label: { 'en-GB': customFieldSet.name, 'de-DE': customFieldSet.name },
+        },
+        active: customFieldSet.active ?? true,
+        global: customFieldSet.global ?? false,
+        position: customFieldSet.position ?? 1,
+      };
+
+      if (setExists) {
+        await this.http.patch(`/api/custom-field-set/${customFieldSet.id}`, setPayload);
+        this.log.debug('Updated existing custom field set', { name: customFieldSet.name });
+      } else {
+        // Include relations when creating
+        const createPayload = {
+          ...setPayload,
+          relations: customFieldSet.relations?.map((rel) => ({
+            id: rel.id || this.generateUuid(),
+            entityName: rel.entityName,
+          })),
+        };
+        await this.http.post('/api/custom-field-set', createPayload);
+        this.log.debug('Created new custom field set', { name: customFieldSet.name });
+      }
+
+      // Step 3: Create or update custom fields
+      if (customFieldSet.customFields && customFieldSet.customFields.length > 0) {
+        for (const field of customFieldSet.customFields) {
+          try {
+            // Check if field exists
+            let fieldExists = false;
+            try {
+              const response = await this.http.get(`/api/custom-field/${field.id}`);
+              fieldExists = !!response.data?.data;
+            } catch {
+              fieldExists = false;
+            }
+
+            const fieldPayload = {
+              id: field.id,
+              name: field.name,
+              type: field.type,
+              config: field.config || {},
+              active: field.active ?? true,
+              customFieldSetId: customFieldSet.id,
+            };
+
+            if (fieldExists) {
+              await this.http.patch(`/api/custom-field/${field.id}`, fieldPayload);
+            } else {
+              await this.http.post('/api/custom-field', fieldPayload);
+            }
+          } catch (fieldError) {
+            this.log.warn('Failed to create/update custom field', {
+              fieldName: field.name,
+              error: this.extractErrorMessage(fieldError),
+            });
+          }
+        }
+        this.log.debug('Created/updated custom fields', { count: customFieldSet.customFields.length });
+      }
+
+      this.log.info('Custom field set ensured successfully', { name: customFieldSet.name });
+
+      return {
+        id: customFieldSet.id,
+        productNumber: '',
+        action: setExists ? 'update' : 'create',
+        success: true,
+      };
+    } catch (error) {
+      const errorMessage = this.extractErrorMessage(error);
+      // Log full error details for debugging
+      let errorDetails = 'no details';
+      let errorStatus = 'unknown';
+      if (error && typeof error === 'object' && 'response' in error) {
+        const axiosError = error as { response?: { data?: unknown; status?: number } };
+        errorStatus = String(axiosError.response?.status || 'no status');
+        errorDetails = JSON.stringify(axiosError.response?.data || 'no data');
+      }
+
+      // Put everything in the message so it definitely shows in logs
+      this.log.error(`Custom field set FAILED: status=${errorStatus}, msg=${errorMessage}, details=${errorDetails}`);
+
+      return {
+        id: customFieldSet.id,
+        productNumber: '',
+        action: 'error',
+        success: false,
+        error: errorMessage,
+      };
+    }
+  }
+
+  /**
+   * Get custom field set by technical name
+   */
+  async getCustomFieldSetByName(name: string): Promise<{
+    id: string;
+    name: string;
+    config?: Record<string, unknown>;
+    customFields?: Array<{ id: string; name: string; type: string }>;
+  } | null> {
+    try {
+      const response = await this.http.post('/api/search/custom-field-set', {
+        filter: [
+          {
+            type: 'equals',
+            field: 'name',
+            value: name,
+          },
+        ],
+        associations: {
+          customFields: {},
+        },
+        limit: 1,
+      });
+
+      const data = response.data?.data?.[0];
+      if (!data) return null;
+
+      return {
+        id: data.id,
+        name: data.name,
+        config: data.config,
+        customFields: data.customFields?.map((cf: { id: string; name: string; type: string }) => ({
+          id: cf.id,
+          name: cf.name,
+          type: cf.type,
+        })),
+      };
+    } catch (error) {
+      this.log.debug('Error searching for custom field set', { name, error: this.extractErrorMessage(error) });
+      return null;
+    }
+  }
+
   // ============================================
   // PRICE METHODS
   // ============================================
@@ -2090,6 +2272,11 @@ export class ShopwareClient implements IShopwareClient {
         salesChannelId: v.salesChannelId,
         visibility: v.visibility,
       }));
+    }
+
+    // Custom fields (for Plenty properties like text, int, float)
+    if (product.customFields && Object.keys(product.customFields).length > 0) {
+      payload.customFields = product.customFields;
     }
 
     // Product media (images)

@@ -1,7 +1,7 @@
 import { PrismaClient, MediaSourceType } from '@prisma/client';
 import { getPrismaClient } from '../database/client';
 import { createLogger, generateDeterministicUuid } from '../utils';
-import type { PlentyVariation, PlentyItemImage } from '../types/plenty';
+import type { PlentyVariation, PlentyItemImage, PlentyItemProperty } from '../types/plenty';
 import type { ShopwareProduct, ShopwareProductMedia, ShopwarePropertyOption, ShopwareProductTranslation } from '../types/shopware';
 import type { FieldMapping, TransformationRule } from '../types/sync';
 import type { IShopwareClient } from '../clients/interfaces';
@@ -207,6 +207,9 @@ export class ProductTransformer {
       this.applyCustomMappings(product, variation, context.customMappings);
     }
 
+    // Note: Plenty properties (non-selection) are now handled as Property Options
+    // via buildPropertiesFromPlentyProperties, not as custom fields
+
     return product;
   }
 
@@ -243,25 +246,22 @@ export class ProductTransformer {
   }
 
   /**
-   * Build properties array from Plenty Properties (variationProperties)
-   * Used for informational properties like Material, Care Instructions
+   * Build properties array from Plenty Properties
+   * Includes BOTH:
+   * - Selection-type properties (from variationProperties via PropertySelectionMapping)
+   * - Non-selection-type properties (from properties via PropertyValueMapping)
    */
   private async buildPropertiesFromPlentyProperties(
     variation: PlentyVariation,
     tenantId: string
   ): Promise<ShopwarePropertyOption[]> {
-    const variationProperties = variation.variationProperties || [];
-
-    if (variationProperties.length === 0) {
-      return [];
-    }
-
     const { PropertyMappingService } = await import('../services/PropertyMappingService');
     const propertyMappingService = new PropertyMappingService();
 
     const properties: ShopwarePropertyOption[] = [];
 
-    // Get all selection IDs
+    // 1. Handle selection-type properties (from variationProperties)
+    const variationProperties = variation.variationProperties || [];
     const selectionIds = variationProperties
       .filter((vp) => vp.propertySelectionId !== null)
       .map((vp) => vp.propertySelectionId as number);
@@ -280,7 +280,61 @@ export class ProductTransformer {
       }
     }
 
+    // 2. Handle non-selection-type properties (from properties array)
+    const itemProperties = variation.properties || [];
+    const nonSelectionProperties = itemProperties.filter(
+      (p) => p.selectionRelationId === null
+    );
+
+    for (const prop of nonSelectionProperties) {
+      // Extract value
+      const value = this.extractNonSelectionPropertyValue(prop);
+      if (!value) continue;
+
+      const valueHash = propertyMappingService.generateValueHash(prop.propertyId, value);
+
+      // Look up the mapping
+      const valueMappings = await propertyMappingService.getBatchPropertyValueMappings(
+        tenantId,
+        prop.propertyId,
+        [valueHash]
+      );
+
+      if (valueMappings[valueHash]) {
+        properties.push({ id: valueMappings[valueHash].shopwarePropertyOptionId });
+      } else {
+        this.log.warn('No value mapping found for non-selection property', {
+          propertyId: prop.propertyId,
+          valueHash,
+          value: value.substring(0, 50),
+        });
+      }
+    }
+
     return properties;
+  }
+
+  /**
+   * Extract value from non-selection property
+   */
+  private extractNonSelectionPropertyValue(prop: PlentyItemProperty): string | null {
+    if (!prop.relationValues || prop.relationValues.length === 0) {
+      return null;
+    }
+
+    // Prefer German, then English, then first available
+    const preferredLangs = ['de', 'en'];
+
+    for (const lang of preferredLangs) {
+      const langValue = prop.relationValues.find(
+        (rv) => rv.lang.toLowerCase() === lang
+      );
+      if (langValue?.value) {
+        return langValue.value;
+      }
+    }
+
+    return prop.relationValues[0]?.value || null;
   }
 
   // ============================================

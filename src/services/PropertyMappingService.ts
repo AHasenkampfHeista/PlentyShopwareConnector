@@ -1,6 +1,7 @@
 import { PrismaClient, MappingType, MappingStatus } from '@prisma/client';
 import { getPrismaClient } from '../database/client';
 import { createLogger } from '../utils/logger';
+import crypto from 'crypto';
 
 // ============================================
 // PROPERTY (PROPERTY GROUP) MAPPINGS
@@ -36,6 +37,28 @@ export interface PropertySelectionMappingRecord {
 
 export interface PropertySelectionMappingLookup {
   [plentySelectionId: number]: {
+    shopwarePropertyGroupId: string;
+    shopwarePropertyOptionId: string;
+    mappingType: 'MANUAL' | 'AUTO';
+  };
+}
+
+// ============================================
+// PROPERTY VALUE (NON-SELECTION) MAPPINGS
+// ============================================
+
+export interface PropertyValueMappingRecord {
+  plentyPropertyId: number;
+  valueHash: string;
+  originalValue: string;
+  shopwarePropertyGroupId: string;
+  shopwarePropertyOptionId: string;
+  mappingType: 'MANUAL' | 'AUTO';
+  lastSyncAction: 'create' | 'update';
+}
+
+export interface PropertyValueMappingLookup {
+  [valueHash: string]: {
     shopwarePropertyGroupId: string;
     shopwarePropertyOptionId: string;
     mappingType: 'MANUAL' | 'AUTO';
@@ -474,6 +497,157 @@ export class PropertyMappingService {
     return mappings.map((m) => ({
       plentyPropertyId: m.plentyPropertyId,
       plentySelectionId: m.plentySelectionId,
+      shopwarePropertyGroupId: m.shopwarePropertyGroupId,
+      shopwarePropertyOptionId: m.shopwarePropertyOptionId,
+      mappingType: m.mappingType,
+      lastSyncAction: m.lastSyncAction as 'create' | 'update',
+    }));
+  }
+
+  // ============================================
+  // PROPERTY VALUE (NON-SELECTION) METHODS
+  // ============================================
+
+  /**
+   * Generate a hash for a property value
+   * Used for deduplication of non-selection property values
+   */
+  generateValueHash(propertyId: number, value: string): string {
+    // Normalize: trim, lowercase for case-insensitive deduplication
+    const normalizedValue = value.trim().toLowerCase();
+    // Include propertyId in hash for uniqueness per property
+    const hashInput = `${propertyId}:${normalizedValue}`;
+    return crypto.createHash('md5').update(hashInput).digest('hex');
+  }
+
+  /**
+   * Get batch property value mappings for multiple value hashes
+   */
+  async getBatchPropertyValueMappings(
+    tenantId: string,
+    plentyPropertyId: number,
+    valueHashes: string[]
+  ): Promise<PropertyValueMappingLookup> {
+    if (valueHashes.length === 0) {
+      return {};
+    }
+
+    const mappings = await this.prisma.propertyValueMapping.findMany({
+      where: {
+        tenantId,
+        plentyPropertyId,
+        valueHash: { in: valueHashes },
+      },
+      select: {
+        valueHash: true,
+        shopwarePropertyGroupId: true,
+        shopwarePropertyOptionId: true,
+        mappingType: true,
+      },
+    });
+
+    const lookup: PropertyValueMappingLookup = {};
+    for (const mapping of mappings) {
+      lookup[mapping.valueHash] = {
+        shopwarePropertyGroupId: mapping.shopwarePropertyGroupId,
+        shopwarePropertyOptionId: mapping.shopwarePropertyOptionId,
+        mappingType: mapping.mappingType,
+      };
+    }
+
+    this.log.debug('Loaded batch property value mappings', {
+      tenantId,
+      propertyId: plentyPropertyId,
+      requested: valueHashes.length,
+      found: Object.keys(lookup).length,
+    });
+
+    return lookup;
+  }
+
+  /**
+   * Upsert multiple property value mappings at once (transaction)
+   */
+  async upsertPropertyValueMappings(
+    tenantId: string,
+    records: PropertyValueMappingRecord[]
+  ): Promise<void> {
+    if (records.length === 0) {
+      return;
+    }
+
+    this.log.debug('Upserting property value mappings', { tenantId, count: records.length });
+
+    const now = new Date();
+
+    await this.prisma.$transaction(
+      records.map((record) =>
+        this.prisma.propertyValueMapping.upsert({
+          where: {
+            tenantId_plentyPropertyId_valueHash: {
+              tenantId,
+              plentyPropertyId: record.plentyPropertyId,
+              valueHash: record.valueHash,
+            },
+          },
+          create: {
+            tenantId,
+            plentyPropertyId: record.plentyPropertyId,
+            valueHash: record.valueHash,
+            originalValue: record.originalValue.substring(0, 255),
+            shopwarePropertyGroupId: record.shopwarePropertyGroupId,
+            shopwarePropertyOptionId: record.shopwarePropertyOptionId,
+            mappingType: record.mappingType,
+            lastSyncedAt: now,
+            lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
+          },
+          update: {
+            shopwarePropertyGroupId: record.shopwarePropertyGroupId,
+            shopwarePropertyOptionId: record.shopwarePropertyOptionId,
+            lastSyncedAt: now,
+            lastSyncAction: record.lastSyncAction,
+            status: MappingStatus.ACTIVE,
+            lastSeenAt: now,
+          },
+        })
+      )
+    );
+
+    this.log.info('Property value mappings upserted successfully', {
+      tenantId,
+      count: records.length,
+    });
+  }
+
+  /**
+   * Get all value mappings for a specific property
+   */
+  async getPropertyValueMappingsByPropertyId(
+    tenantId: string,
+    plentyPropertyId: number
+  ): Promise<PropertyValueMappingRecord[]> {
+    const mappings = await this.prisma.propertyValueMapping.findMany({
+      where: {
+        tenantId,
+        plentyPropertyId,
+      },
+      select: {
+        plentyPropertyId: true,
+        valueHash: true,
+        originalValue: true,
+        shopwarePropertyGroupId: true,
+        shopwarePropertyOptionId: true,
+        mappingType: true,
+        lastSyncAction: true,
+      },
+    });
+
+    return mappings.map((m) => ({
+      plentyPropertyId: m.plentyPropertyId,
+      valueHash: m.valueHash,
+      originalValue: m.originalValue,
       shopwarePropertyGroupId: m.shopwarePropertyGroupId,
       shopwarePropertyOptionId: m.shopwarePropertyOptionId,
       mappingType: m.mappingType,

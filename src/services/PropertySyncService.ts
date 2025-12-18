@@ -7,10 +7,12 @@ import {
   PropertyMappingRecord,
   PropertySelectionMappingLookup,
   PropertySelectionMappingRecord,
+  PropertyValueMappingLookup,
+  PropertyValueMappingRecord,
 } from './PropertyMappingService';
 import type { IShopwareClient } from '../clients/interfaces';
 import type { ShopwarePropertyGroup, ShopwarePropertyOption } from '../types/shopware';
-import type { PlentyVariation } from '../types/plenty';
+import type { PlentyVariation, PlentyItemProperty } from '../types/plenty';
 
 /**
  * Property Sync Service
@@ -54,13 +56,23 @@ export class PropertySyncService {
   ): Promise<{
     propertyMappings: PropertyMappingLookup;
     selectionMappings: PropertySelectionMappingLookup;
+    valueMappings: PropertyValueMappingLookup;
   }> {
     const variationProperties = variation.variationProperties || [];
+    const itemProperties = variation.properties || [];
+
+    // Handle non-selection properties (from variation.properties)
+    const valueMappings = await this.ensureNonSelectionPropertiesExist(
+      tenantId,
+      itemProperties,
+      shopware
+    );
 
     if (variationProperties.length === 0) {
       return {
         propertyMappings: {},
         selectionMappings: {},
+        valueMappings,
       };
     }
 
@@ -217,7 +229,211 @@ export class PropertySyncService {
     return {
       propertyMappings: existingPropertyMappings,
       selectionMappings: existingSelectionMappings,
+      valueMappings,
     };
+  }
+
+  /**
+   * Ensure property options exist for non-selection properties (text, int, float, etc.)
+   * Creates options dynamically based on unique values found in the data
+   */
+  async ensureNonSelectionPropertiesExist(
+    tenantId: string,
+    properties: PlentyItemProperty[],
+    shopware: IShopwareClient
+  ): Promise<PropertyValueMappingLookup> {
+    // Filter to only non-selection properties
+    const nonSelectionProperties = properties.filter(
+      (p) => p.selectionRelationId === null
+    );
+
+    if (nonSelectionProperties.length === 0) {
+      return {};
+    }
+
+    this.log.debug('Processing non-selection properties', {
+      totalProperties: properties.length,
+      nonSelectionCount: nonSelectionProperties.length,
+    });
+
+    const valueMappings: PropertyValueMappingLookup = {};
+    const newValueMappingRecords: PropertyValueMappingRecord[] = [];
+
+    // Group by propertyId for efficient processing
+    const propertiesByPropId = new Map<number, PlentyItemProperty[]>();
+    for (const prop of nonSelectionProperties) {
+      const existing = propertiesByPropId.get(prop.propertyId) || [];
+      existing.push(prop);
+      propertiesByPropId.set(prop.propertyId, existing);
+    }
+
+    for (const [propertyId, propsWithSameId] of propertiesByPropId) {
+      this.log.debug(`Processing non-selection property: propertyId=${propertyId}, valueCount=${propsWithSameId.length}`);
+
+      // Ensure property group exists first
+      let propertyMapping = await this.mappingService.getPropertyMapping(tenantId, propertyId);
+
+      if (!propertyMapping) {
+        this.log.debug(`No existing mapping for propertyId=${propertyId}, creating property group`);
+        // Create the property group
+        try {
+          const shopwareGroupId = await this.createPropertyGroupInShopware(
+            tenantId,
+            propertyId,
+            shopware
+          );
+
+          const plentyProperty = await this.getCachedPlentyProperty(tenantId, propertyId);
+
+          await this.mappingService.upsertPropertyMappings(tenantId, [{
+            plentyPropertyId: propertyId,
+            plentyPropertyGroupId: plentyProperty?.propertyGroupId ?? null,
+            shopwarePropertyGroupId: shopwareGroupId,
+            mappingType: 'AUTO',
+            lastSyncAction: 'create',
+          }]);
+
+          propertyMapping = {
+            shopwarePropertyGroupId: shopwareGroupId,
+            mappingType: 'AUTO',
+          };
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          this.log.error(`Failed to create property group for non-selection property: propertyId=${propertyId}, error=${errorMsg}`);
+          continue;
+        }
+      }
+
+      // Process each property value
+      for (const prop of propsWithSameId) {
+        // Get value from relationValues
+        const value = this.extractPropertyValue(prop);
+
+        if (value === null || value === undefined || value === '') {
+          continue;
+        }
+
+        const valueHash = this.mappingService.generateValueHash(propertyId, String(value));
+
+        // Check if mapping already exists
+        const existingMappings = await this.mappingService.getBatchPropertyValueMappings(
+          tenantId,
+          propertyId,
+          [valueHash]
+        );
+
+        if (existingMappings[valueHash]) {
+          valueMappings[valueHash] = existingMappings[valueHash];
+        } else {
+          // Create new option in Shopware
+          try {
+            const shopwareOptionId = await this.createPropertyOptionForValue(
+              tenantId,
+              propertyId,
+              String(value),
+              propertyMapping.shopwarePropertyGroupId,
+              shopware
+            );
+
+            newValueMappingRecords.push({
+              plentyPropertyId: propertyId,
+              valueHash,
+              originalValue: String(value),
+              shopwarePropertyGroupId: propertyMapping.shopwarePropertyGroupId,
+              shopwarePropertyOptionId: shopwareOptionId,
+              mappingType: 'AUTO',
+              lastSyncAction: 'create',
+            });
+
+            valueMappings[valueHash] = {
+              shopwarePropertyGroupId: propertyMapping.shopwarePropertyGroupId,
+              shopwarePropertyOptionId: shopwareOptionId,
+              mappingType: 'AUTO',
+            };
+
+            this.log.info('Created property option for value', {
+              propertyId,
+              value: String(value).substring(0, 50),
+              shopwareOptionId,
+            });
+          } catch (error) {
+            this.log.error('Failed to create property option for value', {
+              propertyId,
+              value: String(value).substring(0, 50),
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+    }
+
+    // Save all new value mappings
+    if (newValueMappingRecords.length > 0) {
+      await this.mappingService.upsertPropertyValueMappings(tenantId, newValueMappingRecords);
+    }
+
+    return valueMappings;
+  }
+
+  /**
+   * Extract the actual value from a non-selection property
+   */
+  private extractPropertyValue(prop: PlentyItemProperty): string | null {
+    if (!prop.relationValues || prop.relationValues.length === 0) {
+      return null;
+    }
+
+    // Try to find value in preferred languages (de, en, then first available)
+    const preferredLangs = ['de', 'en'];
+
+    for (const lang of preferredLangs) {
+      const langValue = prop.relationValues.find(
+        (rv) => rv.lang.toLowerCase() === lang
+      );
+      if (langValue?.value) {
+        return langValue.value;
+      }
+    }
+
+    // Fall back to first available value
+    return prop.relationValues[0]?.value || null;
+  }
+
+  /**
+   * Create a property option for a non-selection property value
+   */
+  private async createPropertyOptionForValue(
+    tenantId: string,
+    plentyPropertyId: number,
+    value: string,
+    shopwareGroupId: string,
+    shopware: IShopwareClient
+  ): Promise<string> {
+    // Build translations from the value
+    // For non-selection properties, value is the same across languages
+    const translations: Record<string, { name: string }> = {
+      de: { name: value },
+      en: { name: value },
+    };
+
+    const shopwareOption: ShopwarePropertyOption = {
+      id: '',
+      groupId: shopwareGroupId,
+      name: value,
+      position: 0,
+      translations,
+      _plentyPropertyId: plentyPropertyId,
+    };
+
+    const result = await shopware.createPropertyOption(shopwareOption);
+
+    if (!result.success) {
+      throw new Error(
+        `Failed to create property option in Shopware: ${result.error || 'Unknown error'}`
+      );
+    }
+
+    return result.id;
   }
 
   /**
@@ -229,12 +445,21 @@ export class PropertySyncService {
     plentyPropertyId: number,
     shopware: IShopwareClient
   ): Promise<string> {
+    this.log.debug(`createPropertyGroupInShopware: loading property ${plentyPropertyId} from cache`);
+
     // Load property from cache
     const plentyProperty = await this.getCachedPlentyProperty(tenantId, plentyPropertyId);
 
     if (!plentyProperty) {
+      this.log.warn(
+        `Property ${plentyPropertyId} not found in cache. ` +
+        `This property exists on products but was not returned by Plenty's API during config sync. ` +
+        `To fix: Enable "Webshop visibility" for property ${plentyPropertyId} in Plenty (Setup > Item > Properties), then re-run config sync.`
+      );
       throw new Error(`Property ${plentyPropertyId} not found in PlentyProperty cache`);
     }
+
+    this.log.debug(`Found property in cache: id=${plentyProperty.id}, cast=${plentyProperty.cast}`);
 
     // Transform to Shopware format
     const shopwareGroup = this.transformPropertyGroup(plentyProperty);

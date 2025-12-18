@@ -317,6 +317,44 @@ export interface IShopwareClient {
   isAuthenticated(): boolean;
 
   // ============================================
+  // CUSTOM FIELD METHODS
+  // ============================================
+
+  /**
+   * Ensure a custom field set exists with the specified fields
+   * Uses upsert pattern with deterministic UUIDs
+   */
+  ensureCustomFieldSet(customFieldSet: {
+    id: string;
+    name: string;
+    config?: Record<string, unknown>;
+    active?: boolean;
+    global?: boolean;
+    position?: number;
+    customFields?: Array<{
+      id: string;
+      name: string;
+      type: string;
+      config?: Record<string, unknown>;
+      active?: boolean;
+    }>;
+    relations?: Array<{
+      id?: string;
+      entityName: string;
+    }>;
+  }): Promise<ShopwareSyncResult>;
+
+  /**
+   * Get custom field set by technical name
+   */
+  getCustomFieldSetByName(name: string): Promise<{
+    id: string;
+    name: string;
+    config?: Record<string, unknown>;
+    customFields?: Array<{ id: string; name: string; type: string }>;
+  } | null>;
+
+  // ============================================
   // SYSTEM DEFAULTS
   // ============================================
 

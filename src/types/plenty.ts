@@ -73,6 +73,8 @@ export interface PlentyVariation {
   variationImages?: PlentyVariationImage[];
   variationTexts?: PlentyVariationText[];
   unit?: PlentyVariationUnit;
+  // Item properties with values (via ?with=properties)
+  properties?: PlentyItemProperty[];
 }
 
 export interface PlentyVariationSalesPrice {
@@ -513,6 +515,55 @@ export interface PlentyPropertySelectionValue {
   value: string;
   description: string;
   id: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ============================================
+// ITEM PROPERTIES (via ?with=properties on variations)
+// ============================================
+
+/**
+ * Item property with values - returned when using ?with=properties on variations
+ * This is different from variationProperties - it includes actual values and property metadata
+ */
+export interface PlentyItemProperty {
+  id: number;
+  propertyId: number;
+  relationTypeIdentifier: string; // 'item', 'contact', etc.
+  relationTargetId: number; // itemId
+  selectionRelationId: number | null; // Only set for selection-type properties
+  groupId: number | null; // Property group ID
+  markup: number;
+  relationValues: PlentyItemPropertyValue[];
+  propertyRelation: PlentyItemPropertyRelation;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Language-specific value for an item property
+ */
+export interface PlentyItemPropertyValue {
+  id: number;
+  propertyRelationId: number;
+  lang: string;
+  value: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Metadata about the property definition
+ */
+export interface PlentyItemPropertyRelation {
+  id: number;
+  propertyId: number;
+  cast: 'shortText' | 'selection' | 'multiSelection' | 'int' | 'float' | 'file' | 'longText' | 'empty' | 'string';
+  typeIdentifier: string;
+  position: number;
+  propertyGroupId: number | null;
   createdAt: string;
   updatedAt: string;
 }

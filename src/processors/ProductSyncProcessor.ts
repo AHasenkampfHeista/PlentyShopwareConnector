@@ -22,7 +22,8 @@ const DEFAULT_WITH_RELATIONS = [
   'variationBarcodes',
   'variationAttributeValues',
   'variationCategories',
-  'variationProperties',  // For Plenty Properties
+  'variationProperties',  // For Plenty Properties (selection-based)
+  'properties',           // For Plenty Properties with actual values (text, int, etc.)
   'variationTexts',       // For multi-language
   'variationImages',      // For variation-specific image links
   'stock',
@@ -662,7 +663,7 @@ export class ProductSyncProcessor {
         });
       }
 
-      // Ensure properties (informational)
+      // Ensure properties (both selection-based and non-selection properties)
       try {
         await propertySyncService.ensurePropertiesExist(tenantId, variation, shopware);
       } catch (error) {

@@ -46,6 +46,7 @@ model Tenant {
   attributeValueMappings    AttributeValueMapping[]
   propertyMappings          PropertyMapping[]
   propertySelectionMappings PropertySelectionMapping[]
+  propertyValueMappings     PropertyValueMapping[]
   salesPriceMappings        SalesPriceMapping[]
   manufacturerMappings      ManufacturerMapping[]
   mockShopwareManufacturers MockShopwareManufacturer[]
@@ -680,6 +681,44 @@ model PropertySelectionMapping {
   @@index([tenantId, mappingType])
   @@index([tenantId, status])
   @@map("property_selection_mappings")
+}
+
+// ============================================
+// PROPERTY VALUE MAPPING (Non-Selection Properties)
+// Maps unique property values to Shopware Property Options
+// ============================================
+
+model PropertyValueMapping {
+  id                       String        @id @default(uuid())
+  tenantId                 String        @map("tenant_id")
+  tenant                   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // PlentyMarkets identifiers
+  plentyPropertyId         Int           @map("plenty_property_id")
+  valueHash                String        @map("value_hash")    // MD5 hash of normalized value
+  originalValue            String        @map("original_value") // Original value for display/debugging (first 255 chars)
+
+  // Shopware identifiers
+  shopwarePropertyGroupId  String        @map("shopware_property_group_id")
+  shopwarePropertyOptionId String        @map("shopware_property_option_id")
+
+  // Mapping metadata
+  mappingType              MappingType   @map("mapping_type")
+  status                   MappingStatus @default(ACTIVE) @map("status")
+  lastSyncedAt             DateTime      @map("last_synced_at")
+  lastSeenAt               DateTime?     @map("last_seen_at")
+  lastSyncAction           String        @map("last_sync_action") // 'create', 'update'
+
+  // Timestamps
+  createdAt                DateTime      @default(now()) @map("created_at")
+  updatedAt                DateTime      @updatedAt @map("updated_at")
+
+  @@unique([tenantId, plentyPropertyId, valueHash])
+  @@index([tenantId, plentyPropertyId])
+  @@index([tenantId, shopwarePropertyOptionId])
+  @@index([tenantId, mappingType])
+  @@index([tenantId, status])
+  @@map("property_value_mappings")
 }
 
 // ============================================

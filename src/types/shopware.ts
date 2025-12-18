@@ -356,6 +356,57 @@ export interface ShopwareBulkItemResult {
 }
 
 // ============================================
+// CUSTOM FIELDS
+// ============================================
+
+/**
+ * Custom Field Set - container for custom fields
+ */
+export interface ShopwareCustomFieldSet {
+  id: string;
+  name: string; // Technical name, e.g. 'plenty_properties'
+  config?: {
+    label?: Record<string, string>; // Localized labels
+    translated?: boolean;
+  };
+  active?: boolean;
+  global?: boolean;
+  position?: number;
+  customFields?: ShopwareCustomField[];
+  relations?: ShopwareCustomFieldSetRelation[];
+}
+
+/**
+ * Custom Field definition
+ */
+export interface ShopwareCustomField {
+  id: string;
+  name: string; // Technical name, e.g. 'plenty_property_48'
+  type: 'text' | 'int' | 'float' | 'bool' | 'datetime' | 'select' | 'html' | 'json';
+  config?: {
+    label?: Record<string, string>; // Localized labels
+    helpText?: Record<string, string>;
+    placeholder?: Record<string, string>;
+    componentName?: string;
+    customFieldType?: string;
+    customFieldPosition?: number;
+    options?: Array<{ value: string; label: Record<string, string> }>;
+    [key: string]: unknown;
+  };
+  active?: boolean;
+  customFieldSetId?: string;
+}
+
+/**
+ * Relation between Custom Field Set and an entity
+ */
+export interface ShopwareCustomFieldSetRelation {
+  id?: string;
+  customFieldSetId?: string;
+  entityName: string; // 'product', 'category', etc.
+}
+
+// ============================================
 // AUTHENTICATION
 // ============================================
 

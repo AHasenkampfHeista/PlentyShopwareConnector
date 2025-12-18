@@ -1746,6 +1746,48 @@ export class MockShopwareClient implements IShopwareClient {
   }
 
   /**
+   * Ensure a custom field set exists with the specified fields
+   * Mock implementation - stores in memory/logs
+   */
+  async ensureCustomFieldSet(customFieldSet: {
+    id: string;
+    name: string;
+    config?: Record<string, unknown>;
+    customFields?: Array<{
+      id: string;
+      name: string;
+      type: string;
+      config?: Record<string, unknown>;
+    }>;
+    relations?: Array<{ entityName: string }>;
+  }): Promise<ShopwareSyncResult> {
+    this.log.info('Mock Shopware: ensureCustomFieldSet called', {
+      name: customFieldSet.name,
+      fieldsCount: customFieldSet.customFields?.length || 0,
+    });
+
+    return {
+      id: customFieldSet.id,
+      productNumber: '',
+      action: 'create',
+      success: true,
+    };
+  }
+
+  /**
+   * Get custom field set by technical name
+   * Mock implementation - returns null (no persistence)
+   */
+  async getCustomFieldSetByName(name: string): Promise<{
+    id: string;
+    name: string;
+    customFields?: Array<{ id: string; name: string; type: string }>;
+  } | null> {
+    this.log.debug('Mock Shopware: getCustomFieldSetByName called', { name });
+    return null;
+  }
+
+  /**
    * Delete all products for this tenant (useful for testing)
    */
   async deleteAllProducts(): Promise<number> {
