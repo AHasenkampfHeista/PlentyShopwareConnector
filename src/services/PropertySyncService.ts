@@ -304,87 +304,95 @@ export class PropertySyncService {
         }
       }
 
-      // Process each property value
+      // Process each property entry (may have multiple entries for same propertyId)
       for (const prop of propsWithSameId) {
-        // Get value from relationValues (resolves selection IDs to actual names for selection-type properties)
-        const value = await this.extractPropertyValue(prop, tenantId, propertyId);
+        // Get all values from relationValues (handles multiSelection returning multiple values)
+        const values = await this.extractPropertyValues(prop, tenantId, propertyId);
 
-        if (value === null || value === undefined || value === '') {
-          this.log.debug('Skipping property with empty value', {
+        if (values.length === 0) {
+          this.log.debug('Skipping property with no values', {
             propertyId,
             relationValuesCount: prop.relationValues?.length || 0,
           });
           continue;
         }
 
-        this.log.info('Processing property value for auto-creation', {
+        this.log.info('Processing property values for auto-creation', {
           propertyId,
-          value: String(value).substring(0, 50),
+          valueCount: values.length,
+          values: values.map(v => v.substring(0, 30)),
           hasPropertyMapping: !!propertyMapping,
           shopwareGroupId: propertyMapping?.shopwarePropertyGroupId,
         });
 
-        const valueHash = this.mappingService.generateValueHash(propertyId, String(value));
+        // Process each value (for multiSelection this will be multiple values)
+        for (const value of values) {
+          if (!value || value === '') {
+            continue;
+          }
 
-        // Check if mapping already exists
-        const existingMappings = await this.mappingService.getBatchPropertyValueMappings(
-          tenantId,
-          propertyId,
-          [valueHash]
-        );
+          const valueHash = this.mappingService.generateValueHash(propertyId, String(value));
 
-        if (existingMappings[valueHash]) {
-          this.log.debug('Value mapping already exists, skipping creation', {
+          // Check if mapping already exists
+          const existingMappings = await this.mappingService.getBatchPropertyValueMappings(
+            tenantId,
             propertyId,
-            value: String(value).substring(0, 50),
-            valueHash,
-            shopwareOptionId: existingMappings[valueHash].shopwarePropertyOptionId,
-          });
-          valueMappings[valueHash] = existingMappings[valueHash];
-        } else {
-          this.log.info('No existing value mapping, creating new property option', {
-            propertyId,
-            value: String(value).substring(0, 50),
-            valueHash,
-            shopwareGroupId: propertyMapping.shopwarePropertyGroupId,
-          });
-          // Create new option in Shopware
-          try {
-            const shopwareOptionId = await this.createPropertyOptionForValue(
-              tenantId,
+            [valueHash]
+          );
+
+          if (existingMappings[valueHash]) {
+            this.log.debug('Value mapping already exists, skipping creation', {
               propertyId,
-              String(value),
-              propertyMapping.shopwarePropertyGroupId,
-              shopware
-            );
-
-            newValueMappingRecords.push({
-              plentyPropertyId: propertyId,
+              value: String(value).substring(0, 50),
               valueHash,
-              originalValue: String(value),
-              shopwarePropertyGroupId: propertyMapping.shopwarePropertyGroupId,
-              shopwarePropertyOptionId: shopwareOptionId,
-              mappingType: 'AUTO',
-              lastSyncAction: 'create',
+              shopwareOptionId: existingMappings[valueHash].shopwarePropertyOptionId,
             });
-
-            valueMappings[valueHash] = {
-              shopwarePropertyGroupId: propertyMapping.shopwarePropertyGroupId,
-              shopwarePropertyOptionId: shopwareOptionId,
-              mappingType: 'AUTO',
-            };
-
-            this.log.info('Created property option for value', {
+            valueMappings[valueHash] = existingMappings[valueHash];
+          } else {
+            this.log.info('No existing value mapping, creating new property option', {
               propertyId,
               value: String(value).substring(0, 50),
-              shopwareOptionId,
+              valueHash,
+              shopwareGroupId: propertyMapping.shopwarePropertyGroupId,
             });
-          } catch (error) {
-            this.log.error('Failed to create property option for value', {
-              propertyId,
-              value: String(value).substring(0, 50),
-              error: error instanceof Error ? error.message : String(error),
-            });
+            // Create new option in Shopware
+            try {
+              const shopwareOptionId = await this.createPropertyOptionForValue(
+                tenantId,
+                propertyId,
+                String(value),
+                propertyMapping.shopwarePropertyGroupId,
+                shopware
+              );
+
+              newValueMappingRecords.push({
+                plentyPropertyId: propertyId,
+                valueHash,
+                originalValue: String(value),
+                shopwarePropertyGroupId: propertyMapping.shopwarePropertyGroupId,
+                shopwarePropertyOptionId: shopwareOptionId,
+                mappingType: 'AUTO',
+                lastSyncAction: 'create',
+              });
+
+              valueMappings[valueHash] = {
+                shopwarePropertyGroupId: propertyMapping.shopwarePropertyGroupId,
+                shopwarePropertyOptionId: shopwareOptionId,
+                mappingType: 'AUTO',
+              };
+
+              this.log.info('Created property option for value', {
+                propertyId,
+                value: String(value).substring(0, 50),
+                shopwareOptionId,
+              });
+            } catch (error) {
+              this.log.error('Failed to create property option for value', {
+                propertyId,
+                value: String(value).substring(0, 50),
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
           }
         }
       }
@@ -399,88 +407,234 @@ export class PropertySyncService {
   }
 
   /**
-   * Extract the actual value from a property
-   * For selection-type properties: looks up the selection ID in cached property to get the actual name
-   * For non-selection properties: returns the raw value from relationValues
+   * Extract values from a property based on its type
+   * Returns an array of resolved values (single element for most types, multiple for multiSelection)
+   *
+   * Supported property types:
+   * - int, float, text: Returns the raw value as-is
+   * - selection: Resolves the selection ID to its localized name
+   * - multiSelection: Resolves ALL selection IDs to their localized names
+   *
+   * For selection types, relationValues contains entries with:
+   * - lang: "0" (indicates selection ID, not a language code)
+   * - value: the selection ID to look up
+   */
+  private async extractPropertyValues(
+    prop: PlentyItemProperty,
+    tenantId: string,
+    propertyId: number
+  ): Promise<string[]> {
+    if (!prop.relationValues || prop.relationValues.length === 0) {
+      return [];
+    }
+
+    // Get cached property to determine type
+    const cachedProperty = await this.getCachedPlentyProperty(tenantId, propertyId);
+    const propertyType = cachedProperty?.cast || 'text';
+
+    this.log.debug('Extracting property values by type', {
+      propertyId,
+      propertyType,
+      relationValuesCount: prop.relationValues.length,
+    });
+
+    // Dispatch to type-specific handler
+    switch (propertyType) {
+      case 'multiSelection':
+        return this.extractMultiSelectionValues(prop, cachedProperty);
+
+      case 'selection':
+        return this.extractSelectionValue(prop, cachedProperty);
+
+      case 'int':
+      case 'float':
+      case 'text':
+      default:
+        return this.extractSimpleValue(prop);
+    }
+  }
+
+  /**
+   * Handler for simple value types (int, float, text)
+   * Returns raw value from relationValues, preferring de > en > first available
+   */
+  private extractSimpleValue(prop: PlentyItemProperty): string[] {
+    const preferredLangs = ['de', 'en'];
+    let rawValue: string | null = null;
+
+    for (const lang of preferredLangs) {
+      const langValue = prop.relationValues?.find(
+        (rv) => rv.lang.toLowerCase() === lang
+      );
+      if (langValue?.value) {
+        rawValue = langValue.value;
+        break;
+      }
+    }
+
+    if (!rawValue && prop.relationValues && prop.relationValues.length > 0) {
+      rawValue = prop.relationValues[0]?.value || null;
+    }
+
+    return rawValue ? [rawValue] : [];
+  }
+
+  /**
+   * Handler for single selection type
+   * Resolves one selection ID to its localized name
+   */
+  private extractSelectionValue(
+    prop: PlentyItemProperty,
+    cachedProperty: PlentyProperty | null
+  ): string[] {
+    if (!cachedProperty?.selections) {
+      this.log.warn('Selection property missing cached selections', {
+        propertyId: prop.propertyId,
+      });
+      return this.extractSimpleValue(prop); // Fallback to raw value
+    }
+
+    const selections = cachedProperty.selections as Array<{
+      id: number;
+      values?: Record<string, string>;
+    }>;
+
+    // For selection type, get the value (selection ID) - prefer de, then en, then lang="0"
+    const preferredLangs = ['de', 'en', '0'];
+    let rawValue: string | null = null;
+
+    for (const lang of preferredLangs) {
+      const langValue = prop.relationValues?.find(
+        (rv) => rv.lang.toLowerCase() === lang || rv.lang === lang
+      );
+      if (langValue?.value) {
+        rawValue = langValue.value;
+        break;
+      }
+    }
+
+    if (!rawValue && prop.relationValues && prop.relationValues.length > 0) {
+      rawValue = prop.relationValues[0]?.value || null;
+    }
+
+    if (!rawValue) {
+      return [];
+    }
+
+    const selectionId = parseInt(rawValue, 10);
+    if (isNaN(selectionId)) {
+      return [rawValue]; // Return as-is if not a valid ID
+    }
+
+    const selection = selections.find((s) => s.id === selectionId);
+    if (!selection?.values) {
+      this.log.warn('Selection ID not found in cached property', {
+        propertyId: prop.propertyId,
+        selectionId,
+        availableIds: selections.map(s => s.id),
+      });
+      return [rawValue]; // Return raw ID as fallback
+    }
+
+    const resolvedName = selection.values['de'] ||
+                        selection.values['en'] ||
+                        Object.values(selection.values)[0];
+
+    this.log.debug('Resolved selection value', {
+      propertyId: prop.propertyId,
+      selectionId,
+      resolvedName,
+    });
+
+    return resolvedName ? [resolvedName] : [rawValue];
+  }
+
+  /**
+   * Handler for multiSelection type
+   * Resolves ALL selection IDs (entries with lang="0") to their localized names
+   */
+  private extractMultiSelectionValues(
+    prop: PlentyItemProperty,
+    cachedProperty: PlentyProperty | null
+  ): string[] {
+    if (!cachedProperty?.selections) {
+      this.log.warn('MultiSelection property missing cached selections', {
+        propertyId: prop.propertyId,
+      });
+      return [];
+    }
+
+    const selections = cachedProperty.selections as Array<{
+      id: number;
+      values?: Record<string, string>;
+    }>;
+
+    // For multiSelection, entries with lang="0" contain selection IDs
+    const selectionEntries = prop.relationValues?.filter(
+      (rv) => rv.lang === '0' || rv.lang === 'de' || rv.lang === 'en'
+    ) || [];
+
+    // If no explicit selection entries, try all entries
+    const entriesToProcess = selectionEntries.length > 0
+      ? selectionEntries
+      : prop.relationValues || [];
+
+    const resolvedValues: string[] = [];
+
+    for (const entry of entriesToProcess) {
+      if (!entry.value) continue;
+
+      const selectionId = parseInt(entry.value, 10);
+      if (isNaN(selectionId)) {
+        // Not a valid selection ID, could be a raw value - include it
+        resolvedValues.push(entry.value);
+        continue;
+      }
+
+      const selection = selections.find((s) => s.id === selectionId);
+      if (!selection?.values) {
+        this.log.warn('MultiSelection ID not found in cached property', {
+          propertyId: prop.propertyId,
+          selectionId,
+        });
+        continue; // Skip missing selections
+      }
+
+      const resolvedName = selection.values['de'] ||
+                          selection.values['en'] ||
+                          Object.values(selection.values)[0];
+
+      if (resolvedName) {
+        resolvedValues.push(resolvedName);
+        this.log.debug('Resolved multiSelection value', {
+          propertyId: prop.propertyId,
+          selectionId,
+          resolvedName,
+        });
+      }
+    }
+
+    this.log.info('Extracted multiSelection values', {
+      propertyId: prop.propertyId,
+      inputEntries: entriesToProcess.length,
+      resolvedCount: resolvedValues.length,
+      values: resolvedValues,
+    });
+
+    return resolvedValues;
+  }
+
+  /**
+   * Legacy method for backward compatibility - returns single value
+   * @deprecated Use extractPropertyValues instead
    */
   private async extractPropertyValue(
     prop: PlentyItemProperty,
     tenantId: string,
     propertyId: number
   ): Promise<string | null> {
-    if (!prop.relationValues || prop.relationValues.length === 0) {
-      return null;
-    }
-
-    // Get raw value from relationValues (prefer de, then en, then first available)
-    const preferredLangs = ['de', 'en'];
-    let rawValue: string | null = null;
-    let valueLang = 'de';
-
-    for (const lang of preferredLangs) {
-      const langValue = prop.relationValues.find(
-        (rv) => rv.lang.toLowerCase() === lang
-      );
-      if (langValue?.value) {
-        rawValue = langValue.value;
-        valueLang = lang;
-        break;
-      }
-    }
-
-    if (!rawValue) {
-      rawValue = prop.relationValues[0]?.value || null;
-      valueLang = prop.relationValues[0]?.lang || 'de';
-    }
-
-    if (!rawValue) {
-      return null;
-    }
-
-    // Check if this is a selection-type property by looking up the cached property
-    const cachedProperty = await this.getCachedPlentyProperty(tenantId, propertyId);
-
-    if (cachedProperty && (cachedProperty.cast === 'selection' || cachedProperty.cast === 'multiSelection')) {
-      // For selection properties, the rawValue is the selection ID - look up the actual name
-      const selectionId = parseInt(rawValue, 10);
-
-      if (!isNaN(selectionId) && cachedProperty.selections) {
-        const selections = cachedProperty.selections as Array<{
-          id: number;
-          values?: Record<string, string>;
-          position?: number;
-        }>;
-
-        const selection = selections.find((s) => s.id === selectionId);
-
-        if (selection?.values) {
-          // Get name in preferred language
-          const selectionName = selection.values[valueLang] ||
-                               selection.values['de'] ||
-                               selection.values['en'] ||
-                               Object.values(selection.values)[0];
-
-          if (selectionName) {
-            this.log.debug('Resolved selection value', {
-              propertyId,
-              selectionId,
-              rawValue,
-              resolvedName: selectionName,
-            });
-            return selectionName;
-          }
-        }
-
-        this.log.warn('Selection not found in cached property', {
-          propertyId,
-          selectionId,
-          availableSelections: selections.map(s => s.id),
-        });
-      }
-    }
-
-    // For non-selection properties or if lookup failed, return the raw value
-    return rawValue;
+    const values = await this.extractPropertyValues(prop, tenantId, propertyId);
+    return values.length > 0 ? values[0] : null;
   }
 
   /**
