@@ -57,14 +57,7 @@ export class AttributeSyncService {
       .map((vav) => vav.valueId || vav.attributeValueId)
       .filter((id): id is number => id !== undefined && id !== null);
 
-    console.log('🔍 ATTRIBUTE SYNC DEBUG:', {
-      variationId: variation.id,
-      rawAttributeValues: variation.variationAttributeValues,
-      filteredAttributeValueIds: attributeValueIds,
-    });
-
     if (attributeValueIds.length === 0) {
-      console.log('⚠️  No attribute values to sync for variation', variation.id);
       return {
         attributeMappings: {},
         attributeValueMappings: {},
@@ -84,14 +77,6 @@ export class AttributeSyncService {
 
     // Find unmapped attribute values
     const unmappedValueIds = attributeValueIds.filter((id) => !existingValueMappings[id]);
-
-    console.log('🔍 MAPPING CHECK:', {
-      variationId: variation.id,
-      totalAttributeValues: attributeValueIds.length,
-      existingMappings: Object.keys(existingValueMappings).length,
-      unmappedValues: unmappedValueIds.length,
-      unmappedValueIds,
-    });
 
     if (unmappedValueIds.length === 0) {
       // All attribute values already mapped, extract attribute IDs from value mappings
@@ -124,13 +109,6 @@ export class AttributeSyncService {
 
     // Load all attribute data needed for unmapped values
     const attributeData = await this.loadAttributesForValues(tenantId, unmappedValueIds);
-
-    console.log('🔍 LOADED ATTRIBUTE DATA:', {
-      variationId: variation.id,
-      unmappedValueIds,
-      attributeDataCount: attributeData.length,
-      attributeData,
-    });
 
     // Collect unique attribute IDs that need mapping
     const attributeIds = [...new Set(attributeData.map((ad) => ad.attributeId))];
@@ -256,31 +234,13 @@ export class AttributeSyncService {
       where: { tenantId },
     });
 
-    console.log('🔍 LOADING ATTRIBUTES FOR VALUES:', {
-      tenantId,
-      valueIds,
-      attributesInCache: attributes.length,
-      attributeIds: attributes.map((a) => a.id),
-    });
-
     // Find which attribute each value belongs to
     for (const attribute of attributes) {
       const attributeValues =
         (attribute.attributeValues as Array<{ id: number }>) || [];
 
-      console.log('🔍 CHECKING ATTRIBUTE:', {
-        attributeId: attribute.id,
-        backendName: attribute.backendName,
-        valuesCount: attributeValues.length,
-        valueIds: attributeValues.map((v) => v.id),
-      });
-
       for (const value of attributeValues) {
         if (valueIds.includes(value.id)) {
-          console.log('✅ FOUND MATCH:', {
-            attributeId: attribute.id,
-            valueId: value.id,
-          });
           results.push({
             attributeId: attribute.id,
             valueId: value.id,
@@ -288,13 +248,6 @@ export class AttributeSyncService {
         }
       }
     }
-
-    console.log('🔍 LOAD RESULT:', {
-      requestedValueIds: valueIds,
-      foundMatches: results.length,
-      results,
-    });
-
     return results;
   }
 

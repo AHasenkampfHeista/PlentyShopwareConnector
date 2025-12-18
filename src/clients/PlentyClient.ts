@@ -256,13 +256,6 @@ export class PlentyClient {
       queryParams
     );
 
-    console.log('=== PLENTY API RESPONSE ===');
-    console.log('Page:', response.page);
-    console.log('Total Count:', response.totalsCount);
-    console.log('Entries on this page:', response.entries.length);
-    console.log('Is Last Page:', response.isLastPage);
-    console.log('===========================\n');
-
     return response;
   }
 
