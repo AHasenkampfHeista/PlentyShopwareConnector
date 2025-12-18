@@ -9,17 +9,13 @@
     "start:scheduler": "node dist/scheduler.js",
     "start:worker": "node dist/worker.js",
     "lint": "eslint src/**/*.ts scripts/**/*.ts",
-
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:push": "prisma db push",
-    "prisma:seed": "tsx prisma/seed.ts",
     "prisma:studio": "prisma studio",
-
     "docker:up": "docker-compose -f docker/docker-compose.yml up -d",
     "docker:down": "docker-compose -f docker/docker-compose.yml down",
-
     "manage-schedules": "tsx scripts/manage-sync-schedules.ts",
     "manage-category-mappings": "tsx scripts/manage-category-mappings.ts",
     "manage-attribute-mappings": "tsx scripts/manage-attribute-mappings.ts",
